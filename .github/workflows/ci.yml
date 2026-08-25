@@ -24,6 +24,9 @@ jobs:
       - name: tests
         run: PATH="$PWD/.venv/bin:$PATH" bash tests/run_tests.sh
 
+      - name: packaged integration tests
+        run: bash tests/run_integration.sh
+
       - name: ruff check
         run: uvx ruff@0.15.5 check --no-fix .
 

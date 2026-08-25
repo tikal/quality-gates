@@ -16,7 +16,7 @@ command-line argument, so one copy serves many repositories.
     - id: check-marker-budget
       args: [--ceiling, "20", --per-file, "big_module.py=15"]
     - id: check-duplication
-      args: [--root, ., --format, "python,bash", --ext, '\\.(py|sh)$', --min-lines, "5", --min-tokens, "50", --select, tree, --threshold, "0", --strict-scope]
+      args: [--root, ., --format, "python,bash", --ext, '\.(py|sh)$', --min-lines, "5", --min-tokens, "50", --select, tree, --threshold, "0", --strict-scope]
 ```
 
 Each hook ships a working default `args:`, so `pre-commit try-repo` runs without configuration.
@@ -137,10 +137,12 @@ name the path you want.
 ```bash
 uv venv && uv pip install --python .venv/bin/python -e .
 PATH="$PWD/.venv/bin:$PATH" bash tests/run_tests.sh
+bash tests/run_integration.sh
 ```
 
 Each gate is tested for the failure it exists to catch, and for the case it must let
-through.
+through. The integration suite creates an isolated consumer repository and installs each hook
+from a packaged repository through pre-commit.
 
 ## Licence
 
