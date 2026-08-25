@@ -1,0 +1,26 @@
+- id: check-inline-comments
+  name: check inline comments and docstrings
+  description: Fail on a plain inline comment, an over-long marker block, or a docstring on a private function.
+  entry: check-inline-comments
+  language: python
+  types: [python]
+  pass_filenames: false
+  require_serial: true
+
+- id: dict-param-check
+  name: check dict type annotations in public signatures
+  description: Fail on dict or dict[str, Any] in a public parameter or return type.
+  entry: dict-param-check
+  language: python
+  types: [python]
+  pass_filenames: false
+  require_serial: true
+
+- id: check-marker-budget
+  name: marker budget
+  description: Cap the number of TODO/FIXME/NOTE marker blocks a repository may hold.
+  entry: check-marker-budget
+  language: python
+  always_run: true
+  pass_filenames: false
+  require_serial: true
