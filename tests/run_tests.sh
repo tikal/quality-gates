@@ -27,11 +27,22 @@ expect_says() {
     fi
 }
 
+expect_unreadable_marker() {
+    local label="$1" path="$2"
+    expect "$label fails the marker budget" 1 check-marker-budget --ceiling 99
+    expect_says "$label names the unreadable file" "$path" check-marker-budget --ceiling 99
+    git rm -q --cached "$path"
+    rm "$path"
+}
+
 TMP="$(mktemp -d)"
 OTHER="$(mktemp -d)"
 TOOLCHAIN="$(mktemp -d)"
 trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+expect "the Tree-sitter core support cap is declared" 0 python -c \
+    'import tomllib; assert "tree-sitter>=0.25,<0.27" in tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]'
 
 npm install --prefix "$TOOLCHAIN" --cache "$TOOLCHAIN/cache" --no-save "$PACKAGE_ROOT" jscpd@5.0.16 >/dev/null 2>&1 || exit 1
 PATH="$TOOLCHAIN/node_modules/.bin:$PATH"
@@ -62,11 +73,117 @@ rm pkg/untracked.py
 
 printf 'BAD = """\n# TODO: marker text inside a string literal\n"""\nGOOD = 1\n' > pkg/lit.py
 printf 'def doc():\n    """Doc.\n\n    * NOTE: a bullet, not a marker\n    """\n    return 1\n' > pkg/bullet.py
+printf 'const marker = "// TODO: marker text inside a string literal";\n' > pkg/lit.ts
+printf 'const marker = "// TODO: marker text inside a string literal";\n' > pkg/lit.tsx
+printf 'const marker = "// TODO: marker text inside a string literal";\n' > pkg/lit.js
+printf 'const marker = "// TODO: marker text inside a string literal";\n' > pkg/lit.jsx
+printf 'const marker = `// TODO: marker text inside a string literal`;\n' > pkg/lit.mjs
+printf 'const marker = `// TODO: marker text inside a string literal`\n' > pkg/lit.go
+printf "marker='# TODO: marker text inside a string literal'\n" > pkg/lit.sh
 git add -A && git commit -qm markers
 expect "marker text in a string literal is not counted" 0 check-marker-budget --ceiling 2
 expect "a marker bullet in a docstring is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/bullet.py=0
-expect_says "GIT_DIR does not redirect the scan" "scope=3" \
+expect "a TypeScript string literal is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/lit.ts=0
+expect "a TSX string literal is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/lit.tsx=0
+expect "a JavaScript string literal is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/lit.js=0
+expect "a JSX string literal is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/lit.jsx=0
+expect "an MJS template literal is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/lit.mjs=0
+expect "a Go raw string literal is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/lit.go=0
+expect "a shell string literal is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/lit.sh=0
+expect_says "GIT_DIR does not redirect the scan" "scope=10" \
     env GIT_DIR="$OTHER/.git" GIT_INDEX_FILE="$OTHER/.git/index" check-marker-budget --ceiling 5
+
+printf 'const value = `// TODO: template data ${/* TODO: a real template substitution comment */ value} // TODO: template data`;\n' > pkg/template.js
+printf 'printf foo# TODO\n' > pkg/shell-token.sh
+printf 'const expression = /[/* TODO]/;\n' > pkg/regex.js
+printf '<div>// TODO: JSX text</div>;\n' > pkg/jsx-text.jsx
+printf '<div title={/* TODO: an attribute expression comment */ value} />;\n' > pkg/jsx-attribute.jsx
+printf 'function expression() { return /[/* TODO]/; }\n' > pkg/regex-keyword.js
+printf 'const value = 1; /* context\n * TODO: preserved block marker\n */\n' > pkg/block.js
+printf '((value << 1))\n# TODO: real comment after arithmetic shift\n' > pkg/arithmetic.sh
+printf 'value="$(# TODO: a command substitution comment\nprintf ok\n)"\n' > pkg/shell-substitution.sh
+printf 'value="`# TODO: a backtick substitution comment\nprintf ok\n`"\n' > pkg/shell-backticks.sh
+printf '// TODO: a TypeScript comment\n' > pkg/comment.ts
+printf '// TODO: a TSX comment\n' > pkg/comment.tsx
+printf '// TODO: a JavaScript comment\n' > pkg/comment.js
+printf '// TODO: a JSX comment\n' > pkg/comment.jsx
+printf '// TODO: an MJS comment\n' > pkg/comment.mjs
+printf '// TODO: a Go comment\n' > pkg/comment.go
+printf '# TODO: a shell comment\n' > pkg/comment.sh
+git add -A && git commit -qm reader-boundaries
+expect "a template substitution comment is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/template.js=0
+expect "template literal data around a substitution is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/template.js=1
+printf 'BROKEN = """\n# TODO: marker after an unclosed triple quote\n' > pkg/broken.py
+git add pkg/broken.py
+expect "a marker after an unclosed triple quote is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/broken.py=0
+expect_says "an unclosed Python literal is unreadable" "pkg/broken.py" check-marker-budget --ceiling 99
+git rm -q --cached pkg/broken.py
+rm pkg/broken.py
+expect "a shell token containing # is not a comment" 0 check-marker-budget --ceiling 99 --per-file pkg/shell-token.sh=0
+printf 'cat <<EOF\n\tEOF\n# TODO: ordinary heredoc data\nEOF\n' > pkg/heredoc.sh
+git add pkg/heredoc.sh
+expect "an ordinary heredoc parser limitation fails safely" 1 check-marker-budget --ceiling 99 --per-file pkg/heredoc.sh=0
+git rm -q --cached pkg/heredoc.sh
+rm pkg/heredoc.sh
+printf 'cat <<\\EOF\ndata\nEOF\n# TODO: a real comment after an escaped delimiter\n' > pkg/heredoc-escaped.sh
+git add pkg/heredoc-escaped.sh
+expect "an escaped heredoc parser limitation fails safely" 1 check-marker-budget --ceiling 99 --per-file pkg/heredoc-escaped.sh=0
+git rm -q --cached pkg/heredoc-escaped.sh
+rm pkg/heredoc-escaped.sh
+expect "a JavaScript regex character class is not a comment" 0 check-marker-budget --ceiling 99 --per-file pkg/regex.js=0
+expect "JSX text is not a JavaScript comment" 0 check-marker-budget --ceiling 99 --per-file pkg/jsx-text.jsx=0
+expect "a JSX attribute expression comment is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/jsx-attribute.jsx=0
+expect "a regex after a keyword is not a comment" 0 check-marker-budget --ceiling 99 --per-file pkg/regex-keyword.js=0
+expect "a later C-style block marker after code is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/block.js=0
+expect "a shell arithmetic shift does not open a heredoc" 1 check-marker-budget --ceiling 99 --per-file pkg/arithmetic.sh=0
+expect "a shell command substitution comment is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/shell-substitution.sh=0
+expect "a shell backtick substitution comment is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/shell-backticks.sh=0
+expect "a TypeScript comment is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/comment.ts=0
+expect "a TSX comment is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/comment.tsx=0
+expect "a JavaScript comment is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/comment.js=0
+expect "a JSX comment is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/comment.jsx=0
+expect "an MJS comment is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/comment.mjs=0
+expect "a Go comment is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/comment.go=0
+expect "a shell comment is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/comment.sh=0
+printf 'cat <<E"OF"\ndata\nEOF\n# TODO: a real comment after a mixed delimiter\n' > pkg/heredoc-mixed.sh
+git add pkg/heredoc-mixed.sh
+expect "a mixed quoted heredoc parser limitation fails safely" 1 check-marker-budget --ceiling 99
+expect_says "a mixed quoted heredoc parser limitation names the file" "pkg/heredoc-mixed.sh" check-marker-budget --ceiling 99
+git rm -q --cached pkg/heredoc-mixed.sh
+rm pkg/heredoc-mixed.sh
+printf 'const value = "unterminated\n// TODO: hidden marker\n' > pkg/unreadable.js
+git add pkg/unreadable.js
+expect_unreadable_marker "an unclosed JavaScript literal" pkg/unreadable.js
+printf 'const value = "unterminated\n// TODO: hidden marker\n' > pkg/unreadable.ts
+git add pkg/unreadable.ts
+expect_unreadable_marker "an unclosed TypeScript literal" pkg/unreadable.ts
+printf 'const value = "unterminated\n// TODO: hidden marker\n' > pkg/unreadable.tsx
+git add pkg/unreadable.tsx
+expect_unreadable_marker "an unclosed TSX literal" pkg/unreadable.tsx
+printf 'const value = "unterminated\n// TODO: hidden marker\n' > pkg/unreadable.jsx
+git add pkg/unreadable.jsx
+expect_unreadable_marker "an unclosed JSX literal" pkg/unreadable.jsx
+printf 'const value = `unterminated\n// TODO: hidden marker\n' > pkg/unreadable.mjs
+git add pkg/unreadable.mjs
+expect_unreadable_marker "an unclosed MJS template literal" pkg/unreadable.mjs
+printf 'var value = "unterminated\n// TODO: hidden marker\n' > pkg/unreadable.go
+git add pkg/unreadable.go
+expect_unreadable_marker "an unclosed Go literal" pkg/unreadable.go
+printf 'value="unterminated\n# TODO: hidden marker\n' > pkg/unreadable.sh
+git add pkg/unreadable.sh
+expect_unreadable_marker "an unclosed shell literal" pkg/unreadable.sh
+printf 'const value = "first line\nsecond line\n' > pkg/multiline.js
+git add pkg/multiline.js
+expect_unreadable_marker "an invalid JavaScript multiline literal" pkg/multiline.js
+printf 'const value = 1; /* never closes\n' > pkg/block-unreadable.js
+git add pkg/block-unreadable.js
+expect_unreadable_marker "an unclosed JavaScript block comment" pkg/block-unreadable.js
+printf 'cat <<EOF\n# TODO: heredoc data without a terminator\n' > pkg/heredoc-unreadable.sh
+git add pkg/heredoc-unreadable.sh
+expect_unreadable_marker "a shell heredoc without its terminator" pkg/heredoc-unreadable.sh
+printf '\377\376\372' > pkg/invalid-utf8.js
+git add pkg/invalid-utf8.js
+expect_unreadable_marker "invalid UTF-8 JavaScript source" pkg/invalid-utf8.js
 expect "--per-file without = is rejected" 2 check-marker-budget --ceiling 5 --per-file pkg/a.py
 expect "--per-file with a non-number is rejected" 2 check-marker-budget --ceiling 5 --per-file pkg/a.py=x
 expect "--per-file with a non-ASCII digit is rejected" 2 check-marker-budget --ceiling 5 --per-file "pkg/a.py=²"
