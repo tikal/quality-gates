@@ -57,6 +57,11 @@ def is_project_root(path: Path) -> bool:
     return any((path / marker).is_file() for marker in PROJECT_MARKERS)
 
 
+def is_in_skipped_directory(path: Path, skipped_directories: Collection[str] = SKIPPED_DIRECTORIES) -> bool:
+    """True when `path` has a component the gate must not scan."""
+    return bool(set(path.parts).intersection(skipped_directories))
+
+
 def python_files_under(
     path: Path,
     source_directories: Sequence[str] = DEFAULT_SOURCE_DIRECTORIES,
@@ -74,5 +79,4 @@ def python_files_under(
     else:
         found.extend(sorted(path.rglob("*.py")))
 
-    skipped = set(skipped_directories)
-    return [candidate for candidate in found if not skipped.intersection(candidate.parts)]
+    return [candidate for candidate in found if not is_in_skipped_directory(candidate, skipped_directories)]

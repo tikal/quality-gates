@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
-from quality_gates.discovery import tracked_files
+from quality_gates.discovery import is_in_skipped_directory, tracked_files
 from quality_gates.markers import MAX_BLOCK_LINES, count_blocks_in, is_scannable
 from quality_gates.source import UnreadableSource
 
@@ -36,7 +36,7 @@ def _marker_scan(root: Path) -> tuple[Mapping[str, int], list[str]]:
     unreadable = []
     for path in tracked_files(root):
         relative = path.relative_to(root).as_posix()
-        if is_scannable(relative):
+        if is_scannable(relative) and not is_in_skipped_directory(path):
             try:
                 counts[relative] = count_blocks_in(path)
             except UnreadableSource as exc:

@@ -38,7 +38,8 @@ expect_unreadable_marker() {
 TMP="$(mktemp -d)"
 OTHER="$(mktemp -d)"
 TOOLCHAIN="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN"' EXIT
+MARKER_SKIPS="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 expect "the Tree-sitter core support cap is declared" 0 python -c \
@@ -54,6 +55,25 @@ git -C "$OTHER" config user.email t@t
 git -C "$OTHER" config user.name t
 git -C "$OTHER" add -A && git -C "$OTHER" commit -qm other
 
+mkdir -p "$MARKER_SKIPS/pkg"
+printf 'CLEAN = 1\n' > "$MARKER_SKIPS/pkg/clean.py"
+for directory in venv .venv node_modules __pycache__ _generated; do
+    mkdir -p "$MARKER_SKIPS/ignored/$directory"
+    printf '# TODO: marker in a skipped directory\n' > "$MARKER_SKIPS/ignored/$directory/dependency.py"
+done
+git -C "$MARKER_SKIPS" init -q .
+git -C "$MARKER_SKIPS" config user.email t@t
+git -C "$MARKER_SKIPS" config user.name t
+git -C "$MARKER_SKIPS" add -f . && git -C "$MARKER_SKIPS" commit -qm skipped-directories
+
+MARKER_SKIPPED_ROOT="$MARKER_SKIPS/venv/repository"
+mkdir -p "$MARKER_SKIPPED_ROOT/pkg"
+printf '# TODO: marker in a skipped-root repository\n' > "$MARKER_SKIPPED_ROOT/pkg/marker.py"
+git -C "$MARKER_SKIPPED_ROOT" init -q .
+git -C "$MARKER_SKIPPED_ROOT" config user.email t@t
+git -C "$MARKER_SKIPPED_ROOT" config user.name t
+git -C "$MARKER_SKIPPED_ROOT" add -A && git -C "$MARKER_SKIPPED_ROOT" commit -qm skipped-root
+
 cd "$TMP" || exit 1
 git init -q . && git config user.email t@t && git config user.name t
 
@@ -66,6 +86,15 @@ expect "over the ceiling fails" 1 check-marker-budget --ceiling 1
 expect_says "the failure names the count" "2" check-marker-budget --ceiling 1
 expect "a per-file budget can fail alone" 1 check-marker-budget --ceiling 99 --per-file pkg/a.py=1
 expect "a per-file budget can pass" 0 check-marker-budget --ceiling 99 --per-file pkg/a.py=2
+
+expect "default skipped directories do not affect the marker budget" 0 \
+    check-marker-budget --root "$MARKER_SKIPS" --ceiling 0
+expect_says "default skipped directories do not affect marker scope" "scope=1" \
+    check-marker-budget --root "$MARKER_SKIPS" --ceiling 0
+expect "a repository under a skipped directory fails the zero-file scan" 1 \
+    check-marker-budget --root "$MARKER_SKIPPED_ROOT" --ceiling 0
+expect_says "a repository under a skipped directory has zero marker scope" "scanned 0 files" \
+    check-marker-budget --root "$MARKER_SKIPPED_ROOT" --ceiling 0
 
 printf '# TODO: untracked and therefore uncounted\nz = 1\n' > pkg/untracked.py
 expect "an untracked file is not counted" 0 check-marker-budget --ceiling 2
