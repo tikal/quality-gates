@@ -15,6 +15,8 @@ command-line argument, so one copy serves many repositories.
       args: [src]
     - id: check-marker-budget
       args: [--ceiling, "20", --per-file, "big_module.py=15"]
+    - id: check-duplication
+      args: [--root, ., --format, "python,bash", --ext, '\\.(py|sh)$', --min-lines, "5", --min-tokens, "50", --select, tree, --threshold, "0", --strict-scope]
 ```
 
 Each hook ships a working default `args:`, so `pre-commit try-repo` runs without configuration.
@@ -68,6 +70,32 @@ above what the code uses.
 
 Python files are read through `tokenize`, so marker text held in a string literal and a
 `* NOTE:` bullet inside a docstring do not count. Every other language is read as text.
+
+### check-duplication
+
+Runs `jscpd` against a declared source scope. The hook installs the exact `jscpd@5.0.16`
+dependency in its isolated Node environment. It does not use `npx`, `jq`, or a globally
+installed executable.
+
+`--select diff` is the default. It scans the union of staged and unstaged added, copied, and
+modified files. `--select tree` scans every tracked file plus untracked files that Git does not
+ignore. `--all PATH` narrows either mode to one root-relative path.
+
+`--strict-scope` counts selected files that have source beyond line comments and a standalone
+triple-quoted docstring. The gate then compares that count with `jscpd`'s report. A mismatch
+fails, so a tool limit cannot silently produce a partial clean result. Use `--comment-prefix` for
+each line-comment syntax in the selected formats. The default prefix is `#`.
+
+The scope audit uses one line and one token. Files below the clone limits still count as read.
+
+`--ext` is a required regular expression. `--format` is the matching comma-separated `jscpd`
+format list. `--min-lines`, `--min-tokens`, and `--threshold` keep the source detector's limits
+visible in the consumer configuration. `--ignore`, `--exclude-prefix`, and `--diff-exclude`
+remove files from the declared scope. The last option applies only in diff mode.
+
+The gate prints up to ten clone locations on failure. `--no-report` suppresses those locations.
+`--reporters` adds `jscpd` reporters, but JSON remains enabled because the scope check reads its
+report.
 
 ## Badges and skipped directories
 

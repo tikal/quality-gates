@@ -27,3 +27,13 @@
   args: [--ceiling, "0"]
   pass_filenames: false
   require_serial: true
+
+- id: check-duplication
+  name: check copy-paste duplication
+  description: Fail when jscpd finds a clone or reads less than the declared strict scope.
+  entry: check-duplication
+  language: node
+  additional_dependencies: [jscpd@5.0.16]
+  args: [--root, ., --format, "python,bash", --ext, '\\.(py|sh)$', --min-lines, "5", --min-tokens, "50", --select, tree, --threshold, "0", --strict-scope]
+  pass_filenames: false
+  require_serial: true

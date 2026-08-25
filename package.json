@@ -1,0 +1,11 @@
+{
+  "name": "quality-gates",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "check-duplication": "scripts/check-duplication.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
