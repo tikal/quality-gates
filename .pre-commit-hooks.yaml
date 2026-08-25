@@ -10,7 +10,7 @@
 
 - id: dict-param-check
   name: check dict type annotations in public signatures
-  description: Fail on dict or dict[str, Any] in a public parameter or return type.
+  description: Fail on an anonymous dict, Mapping, or MutableMapping shape in a public signature.
   entry: dict-param-check
   language: python
   types: [python]

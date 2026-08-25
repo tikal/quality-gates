@@ -351,6 +351,28 @@ expect "a badge on the annotation line suppresses" 0 dict-param-check pkg/o.py
 printf 'def pub(  # ALLOW: dict-param\n    x: dict,\n) -> int:\n    return 1\n' > pkg/p.py
 expect "a badge on the def line does not suppress" 1 dict-param-check pkg/p.py
 expect_says "the report names the parameter's own line" "pkg/p.py:2:5" dict-param-check pkg/p.py
+printf 'from collections.abc import Mapping\ndef pub(x: Mapping[str, int]) -> int:\n    return 1\n' > pkg/s.py
+expect "an imported Mapping is caught" 1 dict-param-check pkg/s.py
+printf 'from collections.abc import MutableMapping\ndef pub(x: MutableMapping[str, int]) -> int:\n    return 1\n' > pkg/t.py
+expect "an imported MutableMapping is caught" 1 dict-param-check pkg/t.py
+printf 'import collections.abc\ndef pub(x: collections.abc.Mapping[str, int]) -> int:\n    return 1\n' > pkg/u.py
+expect "a qualified Mapping is caught" 1 dict-param-check pkg/u.py
+printf 'import collections.abc\ndef pub(x: collections.abc.MutableMapping[str, int]) -> int:\n    return 1\n' > pkg/v.py
+expect "a qualified MutableMapping is caught" 1 dict-param-check pkg/v.py
+printf 'import typing\ndef pub(x: typing.Mapping[str, int]) -> int:\n    return 1\n' > pkg/aa.py
+expect "a typing.Mapping is caught" 1 dict-param-check pkg/aa.py
+printf 'import typing\ndef pub(x: typing.MutableMapping[str, int]) -> int:\n    return 1\n' > pkg/ab.py
+expect "a typing.MutableMapping is caught" 1 dict-param-check pkg/ab.py
+printf 'import builtins\ndef pub(x: builtins.dict[str, int]) -> int:\n    return 1\n' > pkg/ac.py
+expect "a builtins.dict is caught" 1 dict-param-check pkg/ac.py
+printf 'def pub(x: foreign.Mapping[str, int]) -> int:\n    return 1\n' > pkg/w.py
+expect "a foreign Mapping is not caught" 0 dict-param-check pkg/w.py
+printf 'def pub(x: foreign.MutableMapping[str, int]) -> int:\n    return 1\n' > pkg/x.py
+expect "a foreign MutableMapping is not caught" 0 dict-param-check pkg/x.py
+printf 'def pub(x: "foreign.Mapping[str, int]") -> int:\n    return 1\n' > pkg/y.py
+expect "a quoted foreign Mapping is not caught" 0 dict-param-check pkg/y.py
+printf 'def pub(x: list[foreign.MutableMapping[str, int]]) -> int:\n    return 1\n' > pkg/z.py
+expect "a wrapped foreign MutableMapping is not caught" 0 dict-param-check pkg/z.py
 
 echo "== duplication =="
 mkdir -p clones

@@ -46,13 +46,18 @@ error, so a hand-edited baseline cannot silently lose entries.
 
 ### dict-param-check
 
-Fails on `dict` or `dict[str, Any]` in a public parameter or return type. Use a
-dataclass, a BaseModel or a TypedDict instead.
+Fails on an anonymous mapping shape in a public parameter or return type. This
+includes `dict`, `Mapping`, and `MutableMapping`. The policy rejects anonymous
+mapping shapes, not typed values. Use a dataclass, a BaseModel or a TypedDict to
+declare the mapping shape.
 
 The gate reads public signatures only. It reads positional, keyword-only and
 positional-only parameters, `*args` and `**kwargs`, and the return type. It resolves
-`typing.Dict[...]`, a dict inside a wrapper such as `list[...]` or `Optional[...]`, a
-union arm, and a string annotation such as `"dict[str, int]"`.
+canonical qualified forms such as `builtins.dict[...]`, `typing.Dict[...]`, and
+`collections.abc.Mapping[...]`, a dict-like mapping inside a wrapper such as
+`list[...]` or `Optional[...]`, a union arm, and a string annotation such as
+`"dict[str, int]"`. Other qualified names such as `foreign.Mapping` are not
+treated as mapping annotations.
 
 To keep one dict, put `# ALLOW: dict-param` or `# ALLOW: dict-return` on the line where
 the ANNOTATION ENDS. On a one-line signature every annotation ends on that one line, so
