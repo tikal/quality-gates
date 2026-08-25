@@ -15,6 +15,7 @@ from typing import NamedTuple
 
 from quality_gates.discovery import tracked_files
 from quality_gates.markers import MAX_BLOCK_LINES, count_blocks_in, is_scannable
+from quality_gates.source import UnreadableSource
 
 LADDER = (
     "Before adding a marker, walk the ladder: rename the symbol, put the fact in a test name "
@@ -30,14 +31,23 @@ class Budget(NamedTuple):
     per_file: Mapping[str, int]
 
 
-def marker_counts(root: Path) -> Mapping[str, int]:
-    """Marker blocks per scannable file that git tracks under `root`."""
+def _marker_scan(root: Path) -> tuple[Mapping[str, int], list[str]]:
     counts: dict[str, int] = {}
+    unreadable = []
     for path in tracked_files(root):
         relative = path.relative_to(root).as_posix()
         if is_scannable(relative):
-            counts[relative] = count_blocks_in(path)
-    return counts
+            try:
+                counts[relative] = count_blocks_in(path)
+            except UnreadableSource as exc:
+                counts[relative] = getattr(exc, "marker_count", 0)
+                unreadable.append(f"{relative}:{exc.line}: {exc.reason}")
+    return counts, unreadable
+
+
+def marker_counts(root: Path) -> Mapping[str, int]:
+    """Marker blocks per scannable file that git tracks under `root`."""
+    return _marker_scan(root)[0]
 
 
 def failures(counts: Mapping[str, int], budget: Budget) -> list[str]:
@@ -97,13 +107,19 @@ def main() -> int:
     arguments = _parse_arguments()
     root = arguments.root.resolve()
     try:
-        counts = marker_counts(root)
+        counts, unreadable = _marker_scan(root)
     except RuntimeError as exc:
         print(f"❌ marker budget cannot read {root}: {exc}", file=sys.stderr)
         return 1
 
     if not counts:
         print(f"❌ marker budget scanned 0 files under {root}", file=sys.stderr)
+        return 1
+
+    if unreadable:
+        print("❌ Marker budget could not read:", file=sys.stderr)
+        for problem in unreadable:
+            print(f"  - {problem}", file=sys.stderr)
         return 1
 
     problems = failures(counts, Budget(arguments.ceiling, dict(arguments.per_file)))

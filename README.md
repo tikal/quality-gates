@@ -68,8 +68,14 @@ A file may hold ten blocks; `--per-file PATH=N` raises or lowers that for one fi
 A per-file entry that a file no longer needs is reported, so the budget cannot drift
 above what the code uses.
 
-Python files are read through `tokenize`, so marker text held in a string literal and a
-`* NOTE:` bullet inside a docstring do not count. Every other language is read as text.
+Python files are read through `tokenize`. JavaScript, TypeScript, TSX, Go, and Bash files use
+the bundled Tree-sitter grammars from `tree-sitter-language-pack`. Marker text in literal data
+does not count. Syntax errors and invalid UTF-8 fail as unreadable source. A `* NOTE:` bullet
+inside a Python docstring does not count.
+
+The bundled Bash grammar has known heredoc parsing defects. A Bash file containing a heredoc
+fails the marker budget rather than returning a result that could misread heredoc data as a
+comment.
 
 ### check-duplication
 
