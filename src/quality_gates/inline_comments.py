@@ -2,7 +2,7 @@
 
 A baseline grandfathers what already exists, so the rule can land on a repository that does not
 yet obey it. The baseline is keyed on the offending text, so moving a comment keeps it
-grandfathered and editing it does not.
+grandfathered and editing it does not. A file the gate cannot read is never grandfathered.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from quality_gates.markers import (
     is_marker_header,
     marker_blocks,
 )
+from quality_gates.source import UNPARSABLE, UnreadableSource, comment_tokens, parse_source, read_source
 
 INLINE = "inline"
 LONG_BLOCK = "long-block"
@@ -41,7 +42,12 @@ MESSAGES = {
     LONG_BLOCK: f"Marker block over {MAX_BLOCK_LINES} lines — {REMEDIATION}",
     MODULE_DOCSTRING: f"Module docstring over {MAX_BLOCK_LINES} lines — {REMEDIATION}",
     PRIVATE_DOCSTRING: "Private function/method has a docstring",
+    UNPARSABLE: "File cannot be read",
 }
+
+
+class BaselineError(ValueError):
+    """A baseline file that cannot be read as one entry per line."""
 
 
 class Violation(NamedTuple):
@@ -74,27 +80,32 @@ class Violation(NamedTuple):
         return f"{self.path}:{self.line} - {MESSAGES[self.kind]}: {named}{subject}"
 
 
-def _comment_tokens(filepath: Path) -> list[tokenize.TokenInfo]:
-    with open(filepath, "rb") as handle:
-        return [token for token in tokenize.tokenize(handle.readline) if token.type == tokenize.COMMENT]
-
-
 def _own_line(token: tokenize.TokenInfo) -> bool:
     return token.line[: token.start[1]].strip() == ""
 
 
-def check_inline_comments(filepath: Path, anchor: str) -> list[Violation]:
-    """Check for inline # comments in a Python file, reporting them against `anchor`.
+def check_file(filepath: Path, anchor: str) -> list[Violation]:
+    """Every violation in one file: its comments, its docstrings, or its unreadability.
+
+    The file is decoded and parsed once, in one place, so the comment rule and the docstring rule
+    can never disagree about whether a file is readable.
+    """
+    try:
+        source = read_source(filepath)
+        tokens = comment_tokens(source)
+        tree = parse_source(source)
+    except UnreadableSource as exc:
+        return [Violation(anchor, exc.line, UNPARSABLE, exc.reason)]
+    return check_inline_comments(tokens, anchor) + check_inappropriate_docstrings(tree, anchor)
+
+
+def check_inline_comments(tokens: Sequence[tokenize.TokenInfo], anchor: str) -> list[Violation]:
+    """Check the comment tokens of one Python file, reporting them against `anchor`.
 
     Allows shebangs, encoding declarations, lint pragmas and marker blocks. A marker block is
     a TODO/FIXME/NOTE/XXX/HACK comment plus the own-line comments under it at the same column,
     so the body of a marker is part of that marker rather than a separate comment.
     """
-    try:
-        tokens = _comment_tokens(filepath)
-    except tokenize.TokenError:
-        return []
-
     comments = [CommentLine(t.start[0], t.start[1], t.string.strip()) for t in tokens if _own_line(t)]
     blocks = marker_blocks(comments)
     inside_block = {comment.row for block in blocks for comment in block}
@@ -121,7 +132,7 @@ def check_inline_comments(filepath: Path, anchor: str) -> list[Violation]:
     return violations
 
 
-def check_inappropriate_docstrings(filepath: Path, anchor: str) -> list[Violation]:
+def check_inappropriate_docstrings(tree: ast.Module, anchor: str) -> list[Violation]:
     """Check for docstrings in inappropriate places, reporting them against `anchor`.
 
     Rules:
@@ -131,11 +142,6 @@ def check_inappropriate_docstrings(filepath: Path, anchor: str) -> list[Violatio
     - NO docstrings on private methods/functions (starting with _)
     - ALLOW docstrings on classes, public methods, and public standalone functions
     """
-    try:
-        tree = ast.parse(filepath.read_text(encoding="utf-8"))
-    except SyntaxError:
-        return []
-
     violations = []
 
     module_docstring = ast.get_docstring(tree) or ""
@@ -189,21 +195,25 @@ class Scan:
 
         violations: list[Violation] = []
         for py_file in py_files:
-            anchor = self.anchored(py_file)
-            violations.extend(check_inline_comments(py_file, anchor))
-            violations.extend(check_inappropriate_docstrings(py_file, anchor))
+            violations.extend(check_file(py_file, self.anchored(py_file)))
         return violations, {self.anchored(f) for f in py_files}
 
 
 def read_baseline(path: Path) -> Counter:
-    """The grandfathered fingerprints and their multiplicity, or an empty tally when absent."""
+    """The grandfathered fingerprints and their multiplicity, or an empty tally when absent.
+
+    A line this cannot read is an error, never an entry that is quietly dropped: a hand-edited
+    baseline that loses entries silently grandfathers nothing and reports every old violation.
+    """
     if not path.exists():
         return Counter()
     entries: Counter = Counter()
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip() or line.startswith("#"):
             continue
-        key, count = line.rsplit("\t", 1)
+        key, _, count = line.rpartition("\t")
+        if line.count("\t") != 3 or not count.isascii() or not count.isdigit():
+            raise BaselineError(f"baseline {path}:{lineno}: expected 'path<TAB>kind<TAB>digest<TAB>count'")
         entries[key] += int(count)
     return entries
 
@@ -227,9 +237,16 @@ def write_baseline(path: Path, violations: list[Violation], scanned: set[str], s
     path.write_text(body + "\n" if body else "", encoding="utf-8")
 
 
-def report(new: list[Violation], stale: Counter, checked: int, baselined: int) -> int:
+def _print_unreadable(unreadable: Sequence[Violation]) -> None:
+    headline = f"\n❌ {len(unreadable)} file(s) could not be read. A file a gate cannot read is a violation:\n"
+    print(headline, file=sys.stderr)
+    for violation in sorted(unreadable):
+        print(f"  {violation.render()}", file=sys.stderr)
+
+
+def report(new: list[Violation], unreadable: list[Violation], stale: Counter, checked: int, baselined: int) -> int:
     """Print the outcome and return the exit code the gate must exit with."""
-    if not new and not stale:
+    if not new and not unreadable and not stale:
         grandfathered = f" ({baselined} grandfathered)" if baselined else ""
         print(
             f"✅ All {checked} Python files pass comment validation{grandfathered} scope={checked}",
@@ -243,6 +260,9 @@ def report(new: list[Violation], stale: Counter, checked: int, baselined: int) -
             print(f"  {violation.render()}", file=sys.stderr)
         print(f"\nNew violations: {len(new)}", file=sys.stderr)
 
+    if unreadable:
+        _print_unreadable(unreadable)
+
     if stale:
         print(f"\n❌ {sum(stale.values())} baseline entries no longer match any violation.", file=sys.stderr)
         for key, count in sorted(stale.items()):
@@ -252,15 +272,14 @@ def report(new: list[Violation], stale: Counter, checked: int, baselined: int) -
     return 1
 
 
-def _names(text: str) -> tuple[str, ...]:
-    return tuple(part.strip() for part in text.split(",") if part.strip())
-
-
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check for inline comments and misplaced docstrings.")
     parser.add_argument("paths", nargs="*", default=[Path(".")], type=Path)
-    parser.add_argument("--baseline", type=Path, required=True, help="baseline file of grandfathered violations")
-    parser.add_argument("--no-baseline", action="store_true", help="report every violation")
+    grandfathering = parser.add_mutually_exclusive_group(required=True)
+    grandfathering.add_argument("--baseline", type=Path, help="baseline file of grandfathered violations")
+    grandfathering.add_argument(
+        "--no-baseline", action="store_true", help="report every violation, grandfathering none"
+    )
     parser.add_argument("--update-baseline", action="store_true", help="rewrite the baseline from current state")
     parser.add_argument(
         "--project-root",
@@ -269,28 +288,63 @@ def _parse_arguments() -> argparse.Namespace:
         help="root that every reported path is named relative to (default: current directory)",
     )
     parser.add_argument(
-        "--src-dirs",
-        type=_names,
-        default=DEFAULT_SOURCE_DIRECTORIES,
-        help="comma-separated directories to descend into when a path is a project root",
+        "--src-dir",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=f"an extra directory to descend into at a project root, added to {DEFAULT_SOURCE_DIRECTORIES}; repeatable",
     )
     parser.add_argument(
-        "--skip-dirs",
-        type=_names,
-        default=tuple(sorted(SKIPPED_DIRECTORIES)),
-        help="comma-separated directory names to skip anywhere in a path",
+        "--skip-dir",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="an extra directory name to skip anywhere in a path, added to the defaults; repeatable",
     )
     arguments = parser.parse_args()
+    if arguments.update_baseline and arguments.no_baseline:
+        parser.error("--update-baseline needs a --baseline to write, so it cannot be used with --no-baseline")
     for path in arguments.paths:
         if not path.exists():
             parser.error(f"Path {path} does not exist")
     return arguments
 
 
+def _judge(arguments: argparse.Namespace, scan: Scan, violations: list[Violation], scanned: set[str]) -> int:
+    unreadable = [v for v in violations if v.kind == UNPARSABLE]
+    gradable = [v for v in violations if v.kind != UNPARSABLE]
+
+    if arguments.update_baseline:
+        write_baseline(arguments.baseline, gradable, scanned, scan)
+        print(f"Baseline written: {len(gradable)} entries → {arguments.baseline}", file=sys.stderr)
+        if not unreadable:
+            return 0
+        _print_unreadable(unreadable)
+        return 1
+
+    if arguments.no_baseline:
+        return report(gradable, unreadable, Counter(), len(scanned), 0)
+
+    remaining = read_baseline(arguments.baseline)
+    new = []
+    for violation in gradable:
+        if remaining[violation.fingerprint] > 0:
+            remaining[violation.fingerprint] -= 1
+        else:
+            new.append(violation)
+
+    stale = Counter({key: n for key, n in remaining.items() if n > 0 and key.split("\t", 1)[0] in scanned})
+    return report(new, unreadable, stale, len(scanned), len(gradable) - len(new))
+
+
 def main() -> int:
     """Check every path given, honouring the baseline unless told otherwise."""
     arguments = _parse_arguments()
-    scan = Scan(arguments.project_root.resolve(), arguments.src_dirs, frozenset(arguments.skip_dirs))
+    scan = Scan(
+        arguments.project_root.resolve(),
+        (*DEFAULT_SOURCE_DIRECTORIES, *arguments.src_dir),
+        SKIPPED_DIRECTORIES | frozenset(arguments.skip_dir),
+    )
     violations, scanned = scan.collect(arguments.paths)
 
     if not scanned:
@@ -301,24 +355,11 @@ def main() -> int:
         )
         return 1
 
-    if arguments.update_baseline:
-        write_baseline(arguments.baseline, violations, scanned, scan)
-        print(f"Baseline written: {len(violations)} entries → {arguments.baseline}", file=sys.stderr)
-        return 0
-
-    if arguments.no_baseline:
-        return report(violations, Counter(), len(scanned), 0)
-
-    remaining = read_baseline(arguments.baseline)
-    new = []
-    for violation in violations:
-        if remaining[violation.fingerprint] > 0:
-            remaining[violation.fingerprint] -= 1
-        else:
-            new.append(violation)
-
-    stale = Counter({key: n for key, n in remaining.items() if n > 0 and key.split("\t", 1)[0] in scanned})
-    return report(new, stale, len(scanned), len(violations) - len(new))
+    try:
+        return _judge(arguments, scan, violations, scanned)
+    except BaselineError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

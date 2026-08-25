@@ -2,7 +2,6 @@
 # Every gate must be able to FAIL. Each case builds a tree, runs the gate, and
 # asserts the exit code and the message.
 set -u
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PASS=0
 FAIL=0
 
@@ -29,7 +28,16 @@ expect_says() {
 }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+OTHER="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$OTHER"' EXIT
+
+mkdir -p "$OTHER/pkg"
+printf '# TODO: a marker in another repository\n' > "$OTHER/pkg/a.py"
+git -C "$OTHER" init -q .
+git -C "$OTHER" config user.email t@t
+git -C "$OTHER" config user.name t
+git -C "$OTHER" add -A && git -C "$OTHER" commit -qm other
+
 cd "$TMP" || exit 1
 git init -q . && git config user.email t@t && git config user.name t
 
@@ -42,7 +50,23 @@ expect "over the ceiling fails" 1 check-marker-budget --ceiling 1
 expect_says "the failure names the count" "2" check-marker-budget --ceiling 1
 expect "a per-file budget can fail alone" 1 check-marker-budget --ceiling 99 --per-file pkg/a.py=1
 expect "a per-file budget can pass" 0 check-marker-budget --ceiling 99 --per-file pkg/a.py=2
+
+printf '# TODO: untracked and therefore uncounted\nz = 1\n' > pkg/untracked.py
 expect "an untracked file is not counted" 0 check-marker-budget --ceiling 2
+rm pkg/untracked.py
+
+printf 'BAD = """\n# TODO: marker text inside a string literal\n"""\nGOOD = 1\n' > pkg/lit.py
+printf 'def doc():\n    """Doc.\n\n    * NOTE: a bullet, not a marker\n    """\n    return 1\n' > pkg/bullet.py
+git add -A && git commit -qm markers
+expect "marker text in a string literal is not counted" 0 check-marker-budget --ceiling 2
+expect "a marker bullet in a docstring is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/bullet.py=0
+expect_says "GIT_DIR does not redirect the scan" "scope=3" \
+    env GIT_DIR="$OTHER/.git" GIT_INDEX_FILE="$OTHER/.git/index" check-marker-budget --ceiling 5
+expect "--per-file without = is rejected" 2 check-marker-budget --ceiling 5 --per-file pkg/a.py
+expect "--per-file with a non-number is rejected" 2 check-marker-budget --ceiling 5 --per-file pkg/a.py=x
+expect "--per-file with a non-ASCII digit is rejected" 2 check-marker-budget --ceiling 5 --per-file "pkg/a.py=²"
+expect_says "the malformed --per-file names the format" "expected PATH=N" \
+    check-marker-budget --ceiling 5 --per-file "pkg/a.py=²"
 
 echo "== inline comments =="
 printf 'def f():\n    x = 1  # explain\n    return x\n' > pkg/b.py
@@ -58,6 +82,94 @@ expect "a private docstring fails" 1 check-inline-comments --baseline base.txt p
 printf '# NOTE: a marker is allowed\nz = 3\n' > pkg/e.py
 expect "a marker comment is allowed" 0 check-inline-comments --baseline base.txt pkg/e.py
 
+echo "== inline comments: baseline arguments =="
+expect "--no-baseline works without --baseline" 0 check-inline-comments --no-baseline pkg/e.py
+expect "neither --baseline nor --no-baseline is rejected" 2 check-inline-comments pkg/e.py
+expect "--baseline with --no-baseline is rejected" 2 check-inline-comments --baseline b.txt --no-baseline pkg/e.py
+expect "--update-baseline with --no-baseline is rejected" 2 check-inline-comments --no-baseline --update-baseline pkg/e.py
+
+echo "== inline comments: baseline contents =="
+mkdir -p grand
+printf 'def f():\n    x = 1  # keep me\n    return x\n' > grand/m.py
+check-inline-comments --baseline grand.txt --update-baseline grand >/dev/null 2>&1
+printf 'def f():\n\n\n    x = 1  # keep me\n    return x\n' > grand/m.py
+expect "a moved comment stays grandfathered" 0 check-inline-comments --baseline grand.txt grand
+printf 'def f():\n    x = 1  # keep me, now edited\n    return x\n' > grand/m.py
+expect "an edited comment is no longer grandfathered" 1 check-inline-comments --baseline grand.txt grand
+expect_says "the edited comment is reported" "now edited" check-inline-comments --baseline grand.txt grand
+
+mkdir -p stale
+printf 'def f():\n    x = 1  # goes away\n    return x\n' > stale/s.py
+check-inline-comments --baseline stale.txt --update-baseline stale >/dev/null 2>&1
+printf 'def f():\n    x = 1\n    return x\n' > stale/s.py
+expect "a stale baseline entry fails" 1 check-inline-comments --baseline stale.txt stale
+expect_says "the stale entry is named" "stale x1" check-inline-comments --baseline stale.txt stale
+
+mkdir -p multi
+printf 'def f():\n    x = 1  # twice\n    y = 2  # twice\n    return x + y\n' > multi/m.py
+check-inline-comments --baseline multi.txt --update-baseline multi >/dev/null 2>&1
+expect "two identical comments are grandfathered twice" 0 check-inline-comments --baseline multi.txt multi
+printf 'def f():\n    x = 1  # twice\n    y = 2  # twice\n    z = 3  # twice\n    return x\n' > multi/m.py
+expect "a third copy of a grandfathered comment fails" 1 check-inline-comments --baseline multi.txt multi
+
+printf 'not a baseline line\n' > bad-baseline.txt
+expect "a malformed baseline line fails" 1 check-inline-comments --baseline bad-baseline.txt multi
+expect_says "the malformed baseline line is located" "bad-baseline.txt:1" check-inline-comments --baseline bad-baseline.txt multi
+printf 'a.py\tinline\tabc123abc123\tmany\n' > bad-count.txt
+expect "a baseline count that is not a number fails" 1 check-inline-comments --baseline bad-count.txt multi
+
+echo "== scope =="
+mkdir -p empty
+expect "an empty scan fails the comment gate" 1 check-inline-comments --no-baseline empty
+expect "an empty scan fails the dict gate" 1 dict-param-check empty
+
+mkdir -p lib/tests
+printf 'x = 1  # a bad comment beside a tests directory\n' > lib/bad.py
+printf 'def pub(d: dict) -> int:\n    return 1\n' > lib/dp.py
+printf 'CLEAN = 1\n' > lib/tests/ok.py
+expect "a directory holding tests/ is still read whole by the comment gate" 1 check-inline-comments --no-baseline lib
+expect "a directory holding tests/ is still read whole by the dict gate" 1 dict-param-check lib
+
+mkdir -p proj/src proj/notes
+printf '[project]\nname = "p"\n' > proj/pyproject.toml
+printf 'OK = 1\n' > proj/src/ok.py
+printf 'x = 1  # outside the source directories\n' > proj/notes/bad.py
+expect "a project root narrows to its source directories" 0 check-inline-comments --no-baseline proj
+printf 'y = 2  # sitting at the project root\n' > proj/top.py
+expect "a project root still reads its own top-level files" 1 check-inline-comments --no-baseline proj
+
+mkdir -p proj2/src/__pycache__ proj2/extra
+printf '[project]\nname = "p2"\n' > proj2/pyproject.toml
+printf 'OK = 1\n' > proj2/src/ok.py
+printf 'ALSO = 2\n' > proj2/extra/ok.py
+printf 'CACHED = 3\n' > proj2/src/__pycache__/c.py
+expect_says "an extra directory is not a source directory by default" "scope=1" check-inline-comments --no-baseline proj2
+expect_says "--src-dir ADDS to the default source directories" "scope=2" \
+    check-inline-comments --no-baseline --src-dir extra proj2
+expect_says "--skip-dir KEEPS the default skipped directories" "scope=1" \
+    check-inline-comments --no-baseline --skip-dir extra proj2
+expect_says "--skip-dir can exclude a directory --src-dir added" "scope=1" \
+    check-inline-comments --no-baseline --src-dir extra --skip-dir extra proj2
+printf 'def pub(d: dict) -> int:\n    return 1\n' > proj2/extra/dp.py
+expect "the dict gate ignores an extra directory by default" 0 dict-param-check proj2
+expect "--src-dir widens the dict gate too" 1 dict-param-check --src-dir extra proj2
+
+echo "== unreadable files =="
+mkdir -p bad
+printf 'def broken(:\n# a comment hidden behind a syntax error\n' > bad/broken.py
+expect "an unparsable file fails the comment gate" 1 check-inline-comments --no-baseline bad/broken.py
+expect_says "the unparsable file is named" "bad/broken.py" check-inline-comments --no-baseline bad/broken.py
+expect "an unparsable file fails the dict gate" 1 dict-param-check bad/broken.py
+check-inline-comments --baseline broken.txt --update-baseline bad/broken.py >/dev/null 2>&1
+expect "an unparsable file cannot be grandfathered" 1 check-inline-comments --baseline broken.txt bad/broken.py
+printf '# -*- coding: nosuchcodec -*-\nx = 1\n' > bad/cookie.py
+expect "a bad encoding cookie is reported, not raised" 1 check-inline-comments --no-baseline bad/cookie.py
+expect_says "the encoding failure names the file" "bad/cookie.py" check-inline-comments --no-baseline bad/cookie.py
+expect "a bad encoding cookie fails the dict gate too" 1 dict-param-check bad/cookie.py
+printf 'x = "\377\376\372"\n' > bad/rawbytes.py
+expect "undecodable bytes fail the comment gate" 1 check-inline-comments --no-baseline bad/rawbytes.py
+expect "undecodable bytes fail the dict gate" 1 dict-param-check bad/rawbytes.py
+
 echo "== dict params =="
 printf 'def pub(x: dict) -> int:\n    return 1\n' > pkg/f.py
 expect "a public dict parameter fails" 1 dict-param-check pkg/f.py
@@ -67,6 +179,27 @@ printf 'def _priv(x: dict) -> int:\n    return 1\n' > pkg/h.py
 expect "a private function is not checked" 0 dict-param-check pkg/h.py
 printf 'def pub2(x: int) -> dict:\n    return {}\n' > pkg/i.py
 expect "a dict return type fails" 1 dict-param-check pkg/i.py
+
+printf 'import typing\ndef pub(x: typing.Dict[str, int]) -> int:\n    return 1\n' > pkg/j.py
+expect "typing.Dict[...] is caught" 1 dict-param-check pkg/j.py
+printf 'import typing\ndef pub(x: typing.Dict) -> int:\n    return 1\n' > pkg/q.py
+expect "a bare typing.Dict is caught" 1 dict-param-check pkg/q.py
+printf 'def pub(x: dict.Thing) -> int:\n    return 1\n' > pkg/r.py
+expect "an attribute whose value is named dict is not caught" 0 dict-param-check pkg/r.py
+printf 'def pub(x: "dict[str, int]") -> int:\n    return 1\n' > pkg/k.py
+expect "a string annotation is caught" 1 dict-param-check pkg/k.py
+printf 'def pub(*args: dict) -> int:\n    return 1\n' > pkg/l.py
+expect "a dict on *args is caught" 1 dict-param-check pkg/l.py
+printf 'def pub(**kwargs: dict) -> int:\n    return 1\n' > pkg/m.py
+expect "a dict on **kwargs is caught" 1 dict-param-check pkg/m.py
+printf 'def pub(x: dict) -> int:  # ALLOW: dict-parameter-later\n    return 1\n' > pkg/n.py
+expect "a badge that merely starts with the name does not suppress" 1 dict-param-check pkg/n.py
+
+printf 'def pub(\n    x: dict,  # ALLOW: dict-param\n) -> int:\n    return 1\n' > pkg/o.py
+expect "a badge on the annotation line suppresses" 0 dict-param-check pkg/o.py
+printf 'def pub(  # ALLOW: dict-param\n    x: dict,\n) -> int:\n    return 1\n' > pkg/p.py
+expect "a badge on the def line does not suppress" 1 dict-param-check pkg/p.py
+expect_says "the report names the parameter's own line" "pkg/p.py:2:5" dict-param-check pkg/p.py
 
 echo
 echo "==== PASS=$PASS FAIL=$FAIL"

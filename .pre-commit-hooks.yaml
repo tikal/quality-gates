@@ -4,6 +4,7 @@
   entry: check-inline-comments
   language: python
   types: [python]
+  args: [--baseline, .quality/inline-comments.txt]
   pass_filenames: false
   require_serial: true
 
@@ -13,6 +14,7 @@
   entry: dict-param-check
   language: python
   types: [python]
+  args: []
   pass_filenames: false
   require_serial: true
 
@@ -22,5 +24,6 @@
   entry: check-marker-budget
   language: python
   always_run: true
+  args: [--ceiling, "0"]
   pass_filenames: false
   require_serial: true

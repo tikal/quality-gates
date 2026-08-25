@@ -72,7 +72,7 @@ def failures(counts: Mapping[str, int], budget: Budget) -> list[str]:
 
 def _per_file_entry(text: str) -> tuple[str, int]:
     relative, separator, allowed = text.rpartition("=")
-    if not separator or not relative or not allowed.isdigit():
+    if not separator or not relative or not allowed.isascii() or not allowed.isdigit():
         raise argparse.ArgumentTypeError(f"expected PATH=N, got {text!r}")
     return relative, int(allowed)
 

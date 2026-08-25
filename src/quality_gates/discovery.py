@@ -15,6 +15,8 @@ SKIPPED_DIRECTORIES = frozenset({"venv", ".venv", "node_modules", "__pycache__",
 
 DEFAULT_SOURCE_DIRECTORIES = ("src", "tests")
 
+PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
+
 
 def tracked_files(root: Path) -> list[Path]:
     """Every file git tracks under `root`, discovered from the index rather than the filesystem.
@@ -45,6 +47,16 @@ def tracked_files(root: Path) -> list[Path]:
     return [path for rel in listing.stdout.split("\0") if rel and (path := root / rel).exists()]
 
 
+def is_project_root(path: Path) -> bool:
+    """True when a directory declares a Python project, so its source directories are meaningful.
+
+    Narrowing a scan to `src` and `tests` is only ever right for a project root. Applied to any
+    directory that happens to hold a child of that name, it drops every other file in silence and
+    the gate reports a clean tree it never read.
+    """
+    return any((path / marker).is_file() for marker in PROJECT_MARKERS)
+
+
 def python_files_under(
     path: Path,
     source_directories: Sequence[str] = DEFAULT_SOURCE_DIRECTORIES,
@@ -54,9 +66,13 @@ def python_files_under(
     if path.is_file():
         return [path] if path.suffix == ".py" else []
 
-    roots = [path / name for name in source_directories if (path / name).exists()] or [path]
-
     found: list[Path] = []
-    for root in roots:
-        found.extend(sorted(root.rglob("*.py")))
-    return [candidate for candidate in found if not set(skipped_directories).intersection(candidate.parts)]
+    if is_project_root(path):
+        found.extend(sorted(path.glob("*.py")))
+        for name in source_directories:
+            found.extend(sorted((path / name).rglob("*.py")))
+    else:
+        found.extend(sorted(path.rglob("*.py")))
+
+    skipped = set(skipped_directories)
+    return [candidate for candidate in found if not skipped.intersection(candidate.parts)]
