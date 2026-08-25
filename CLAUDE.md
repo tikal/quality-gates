@@ -6,7 +6,8 @@ hard-coding a consumer repository.
 ## Commands
 
 - Install: `uv venv && uv pip install --python .venv/bin/python -e .`
-- Test: `PATH="$PWD/.venv/bin:$PATH" bash tests/run_tests.sh`
+- Focused test: `PATH="$PWD/.venv/bin:$PATH" bash tests/run_tests.sh`
+- Packaged integration test: `bash tests/run_integration.sh`
 - Lint: `uvx ruff@0.15.5 check --no-fix .`
 - Format check: `uvx ruff@0.15.5 format --check .`
 
