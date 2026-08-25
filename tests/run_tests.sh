@@ -29,7 +29,12 @@ expect_says() {
 
 TMP="$(mktemp -d)"
 OTHER="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$OTHER"' EXIT
+TOOLCHAIN="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN"' EXIT
+PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+npm install --prefix "$TOOLCHAIN" --cache "$TOOLCHAIN/cache" --no-save "$PACKAGE_ROOT" jscpd@5.0.16 >/dev/null 2>&1 || exit 1
+PATH="$TOOLCHAIN/node_modules/.bin:$PATH"
 
 mkdir -p "$OTHER/pkg"
 printf '# TODO: a marker in another repository\n' > "$OTHER/pkg/a.py"
@@ -200,6 +205,37 @@ expect "a badge on the annotation line suppresses" 0 dict-param-check pkg/o.py
 printf 'def pub(  # ALLOW: dict-param\n    x: dict,\n) -> int:\n    return 1\n' > pkg/p.py
 expect "a badge on the def line does not suppress" 1 dict-param-check pkg/p.py
 expect_says "the report names the parameter's own line" "pkg/p.py:2:5" dict-param-check pkg/p.py
+
+echo "== duplication =="
+mkdir -p clones
+printf 'def alpha():\n    total = 1\n    total += 2\n    total += 3\n    return total\n' > clones/a.py
+printf 'def beta():\n    total = 1\n    total += 2\n    total += 3\n    return total\n' > clones/b.py
+git add -A && git commit -qm clones
+expect "a clone fails in tree mode" 1 check-duplication --root . --format python --ext '\.py$' \
+    --min-lines 2 --min-tokens 5 --select tree --threshold 0
+expect_says "--all . keeps the full tree scope" "Top duplication opportunities" check-duplication --root . --format python \
+    --ext '\.py$' --min-lines 2 --min-tokens 5 --select tree --threshold 0 --all .
+printf '"""Module documentation."""\n' > clones/docstring.py
+expect "a docstring-only file does not break strict scope" 0 check-duplication --root . --format python --ext '\.py$' \
+    --min-lines 2 --min-tokens 5 --select tree --threshold 0 --all clones --ignore 'clones/b.py' --strict-scope
+printf 'def short():\n    value = 1\n    value += 2\n    return value\n' > clones/short.py
+expect "strict scope reads files below the clone token limit" 0 check-duplication --root . --format python --ext '\.py$' \
+    --select tree --threshold 0 --all clones/short.py --strict-scope
+expect_says "strict scope reports the audited source count" "scope=1" check-duplication --root . --format python --ext '\.py$' \
+    --select tree --threshold 0 --all clones/short.py --strict-scope
+expect "--ignore narrows strict scope" 0 check-duplication --root . --format python --ext '\.py$' --min-lines 2 \
+    --min-tokens 5 --select tree --threshold 0 --all clones --ignore 'clones/b.py' --strict-scope
+
+printf 'def alpha():\n    total = 4\n    total += 5\n    total += 6\n    return total\n' > clones/a.py
+printf 'def beta():\n    total = 4\n    total += 5\n    total += 6\n    return total\n' > clones/b.py
+expect "a clone fails in diff mode" 1 check-duplication --root . --format python --ext '\.py$' \
+    --min-lines 2 --min-tokens 5 --select diff --threshold 0
+
+mkdir -p fake-bin
+printf '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n    if [ "$1" = "--output" ]; then\n        mkdir -p "$2"\n        printf "{\\\"statistics\\\": {\\\"total\\\": {\\\"sources\\\": 0}}, \\\"duplicates\\\": []}" > "$2/jscpd-report.json"\n        exit 0\n    fi\n    shift\ndone\nexit 1\n' > fake-bin/jscpd
+chmod +x fake-bin/jscpd
+expect "a strict scope mismatch fails" 1 env PATH="$PWD/fake-bin:$PATH" check-duplication --root . --format python \
+    --ext '\.py$' --min-lines 2 --min-tokens 5 --select tree --threshold 0 --strict-scope
 
 echo
 echo "==== PASS=$PASS FAIL=$FAIL"

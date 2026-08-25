@@ -40,10 +40,12 @@ hard-coding a consumer repository.
 Do not write production code before a failing test.
 
 1. Add the smallest failing case to `tests/run_tests.sh`.
-2. Run the script and confirm the expected failure.
+2. Run only that case and confirm the expected failure.
 3. Make the smallest implementation change.
-4. Run the script, Ruff check, and the format check.
+4. Run the full test script, Ruff check, and the format check.
 5. Refactor only while all checks pass.
+
+Do not run a broader suite before a focused test identifies the expected failure.
 
 Each gate needs a test for the breach it catches and the matching clean case. A test must verify
 the exit code and, when useful, the reported path or reason.
