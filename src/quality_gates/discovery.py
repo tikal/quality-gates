@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from argparse import ArgumentParser
 from collections.abc import Collection, Sequence
 from pathlib import Path
 
@@ -16,6 +17,24 @@ SKIPPED_DIRECTORIES = frozenset({"venv", ".venv", "node_modules", "__pycache__",
 DEFAULT_SOURCE_DIRECTORIES = ("src", "tests")
 
 PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
+
+
+def add_scope_arguments(parser: ArgumentParser) -> None:
+    """Add source directory options that only widen the shared default scan scope."""
+    parser.add_argument(
+        "--src-dir",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=f"an extra directory to descend into at a project root, added to {DEFAULT_SOURCE_DIRECTORIES}; repeatable",
+    )
+    parser.add_argument(
+        "--skip-dir",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="an extra directory name to skip anywhere in a path, added to the defaults; repeatable",
+    )
 
 
 def tracked_files(root: Path) -> list[Path]:
