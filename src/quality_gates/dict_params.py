@@ -15,7 +15,12 @@ from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
-from quality_gates.discovery import DEFAULT_SOURCE_DIRECTORIES, SKIPPED_DIRECTORIES, python_files_under
+from quality_gates.discovery import (
+    DEFAULT_SOURCE_DIRECTORIES,
+    SKIPPED_DIRECTORIES,
+    add_scope_arguments,
+    python_files_under,
+)
 from quality_gates.source import UnreadableSource, parse_source, read_source
 
 WRAPPER_TYPES = {
@@ -229,20 +234,7 @@ def analyze(paths: Sequence[Path]) -> Report:
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check for dict annotations in public signatures.")
     parser.add_argument("paths", nargs="*", default=[Path(".")], type=Path)
-    parser.add_argument(
-        "--src-dir",
-        action="append",
-        default=[],
-        metavar="NAME",
-        help=f"an extra directory to descend into at a project root, added to {DEFAULT_SOURCE_DIRECTORIES}; repeatable",
-    )
-    parser.add_argument(
-        "--skip-dir",
-        action="append",
-        default=[],
-        metavar="NAME",
-        help="an extra directory name to skip anywhere in a path, added to the defaults; repeatable",
-    )
+    add_scope_arguments(parser)
     return parser.parse_args()
 
 

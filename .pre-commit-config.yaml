@@ -1,0 +1,12 @@
+repos:
+  - repo: .
+    rev: HEAD
+    hooks:
+      - id: check-inline-comments
+        args: [--no-baseline, src, tests]
+      - id: dict-param-check
+        args: [src, tests]
+      - id: check-marker-budget
+        args: [--ceiling, "0"]
+      - id: check-duplication
+        args: [--root, ., --format, "python,bash,javascript", --ext, '\.(py|sh|js)$', --min-lines, "5", --min-tokens, "50", --select, tree, --threshold, "0", --comment-prefix, //, --strict-scope]

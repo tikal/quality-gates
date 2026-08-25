@@ -149,11 +149,13 @@ name the path you want.
 uv venv && uv pip install --python .venv/bin/python -e .
 PATH="$PWD/.venv/bin:$PATH" bash tests/run_tests.sh
 bash tests/run_integration.sh
+bash tests/run_dogfood.sh
 ```
 
 Each gate is tested for the failure it exists to catch, and for the case it must let
 through. The integration suite creates an isolated consumer repository and installs each hook
-from a packaged repository through pre-commit.
+from a packaged repository through pre-commit. The dogfood suite installs every exported hook
+through `.pre-commit-config.yaml` and runs it across this repository.
 
 ## Licence
 

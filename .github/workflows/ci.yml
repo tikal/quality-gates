@@ -27,6 +27,9 @@ jobs:
       - name: packaged integration tests
         run: bash tests/run_integration.sh
 
+      - name: dogfood pre-commit configuration
+        run: bash tests/run_dogfood.sh
+
       - name: ruff check
         run: uvx ruff@0.15.5 check --no-fix .
 

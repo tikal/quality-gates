@@ -171,10 +171,13 @@ function printClones(clones) {
   });
 }
 
-function runJscpd(files, options) {
+function runJscpd(files, options, quiet = false) {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), 'jscpd-'));
   try {
-    const result = childProcess.spawnSync('jscpd', jscpdArguments(files, output, options), { cwd: options.root, stdio: 'inherit' });
+    const result = childProcess.spawnSync('jscpd', jscpdArguments(files, output, options), {
+      cwd: options.root,
+      stdio: quiet ? 'pipe' : 'inherit',
+    });
     const details = report(output);
     if (result.error) throw result.error;
     return { details, result };
@@ -191,8 +194,13 @@ function main() {
     const sources = files.filter((file) => hasSource(options.root, file, options.commentPrefixes));
     if (files.length === 0 || sources.length === 0) return fail(`matched no source files under ${options.root}`);
     if (options.strictScope) {
-      const scope = runJscpd(sources, { ...options, minLines: 1, minTokens: 1, reporters: 'json', threshold: 100 });
-      if (scope.result.status !== 0) throw new Error(`jscpd coverage scan exited ${scope.result.status}`);
+      const scope = runJscpd(sources, { ...options, minLines: 1, minTokens: 1, reporters: 'json', threshold: 0 }, true);
+      if (scope.result.status !== 0 && scope.result.status !== 1) {
+        throw new Error(`jscpd coverage scan exited ${scope.result.status}`);
+      }
+      if (scope.result.status === 1 && scope.details.clones.length === 0) {
+        throw new Error('jscpd coverage scan exited 1 without reporting duplicates');
+      }
       if (scope.details.sources !== sources.length) {
         return fail(`jscpd read ${scope.details.sources} of ${sources.length} source files`);
       }

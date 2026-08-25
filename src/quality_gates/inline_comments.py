@@ -20,7 +20,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
-from quality_gates.discovery import DEFAULT_SOURCE_DIRECTORIES, SKIPPED_DIRECTORIES, python_files_under
+from quality_gates.discovery import (
+    DEFAULT_SOURCE_DIRECTORIES,
+    SKIPPED_DIRECTORIES,
+    add_scope_arguments,
+    python_files_under,
+)
 from quality_gates.markers import (
     MAX_BLOCK_LINES,
     CommentLine,
@@ -324,20 +329,7 @@ def _parse_arguments() -> argparse.Namespace:
         default=Path.cwd(),
         help="root that every reported path is named relative to (default: current directory)",
     )
-    parser.add_argument(
-        "--src-dir",
-        action="append",
-        default=[],
-        metavar="NAME",
-        help=f"an extra directory to descend into at a project root, added to {DEFAULT_SOURCE_DIRECTORIES}; repeatable",
-    )
-    parser.add_argument(
-        "--skip-dir",
-        action="append",
-        default=[],
-        metavar="NAME",
-        help="an extra directory name to skip anywhere in a path, added to the defaults; repeatable",
-    )
+    add_scope_arguments(parser)
     arguments = parser.parse_args()
     if (arguments.update_baseline or arguments.shrink_baseline) and arguments.no_baseline:
         parser.error("a baseline write needs --baseline, so it cannot be used with --no-baseline")

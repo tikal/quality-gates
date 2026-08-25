@@ -45,18 +45,7 @@ def _marker_scan(root: Path) -> tuple[Mapping[str, int], list[str]]:
     return counts, unreadable
 
 
-def marker_counts(root: Path) -> Mapping[str, int]:
-    """Marker blocks per scannable file that git tracks under `root`."""
-    return _marker_scan(root)[0]
-
-
-def failures(counts: Mapping[str, int], budget: Budget) -> list[str]:
-    """Budget breaches, plus per-file entries that no longer earn their place.
-
-    A per-file entry above the default cap is an exception the repository bought. It is spent
-    once the file falls back under the default, and the gate says so. An entry at or below the
-    default is a deliberate tightening, so it is never reported as spent.
-    """
+def _failures(counts: Mapping[str, int], budget: Budget) -> list[str]:
     problems = [
         f"{relative}: {count} markers, budget {allowed}"
         for relative, count in sorted(counts.items())
@@ -122,7 +111,7 @@ def main() -> int:
             print(f"  - {problem}", file=sys.stderr)
         return 1
 
-    problems = failures(counts, Budget(arguments.ceiling, dict(arguments.per_file)))
+    problems = _failures(counts, Budget(arguments.ceiling, dict(arguments.per_file)))
     if not problems:
         print(f"marker budget clean ({sum(counts.values())} markers) scope={len(counts)}")
         return 0
