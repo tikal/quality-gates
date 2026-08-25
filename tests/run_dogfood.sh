@@ -2,6 +2,8 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+UV="$(command -v uv)"
+NODE_DIRECTORY="$(dirname "$(command -v node)")"
 TEMPORARY="$(mktemp -d)"
 CONSUMER="$TEMPORARY/consumer"
 trap 'rm -rf "$TEMPORARY"' EXIT
@@ -22,7 +24,7 @@ git -C "$CONSUMER" commit -qm dogfood
 run_pre_commit() {
     (
         cd "$CONSUMER"
-        PRE_COMMIT_HOME="$TEMPORARY/pre-commit" uv run --isolated --with pre-commit==4.6.0 pre-commit "$@"
+        PRE_COMMIT_HOME="$TEMPORARY/pre-commit" "$UV" run --isolated --with pre-commit==4.6.0 pre-commit "$@"
     )
 }
 
@@ -117,4 +119,8 @@ done
 
 printf 'DOGFOOD = 1\n' > "$CONSUMER/dogfood.py"
 git -C "$CONSUMER" add dogfood.py
-PRE_COMMIT_HOME="$TEMPORARY/pre-commit" "$CONSUMER/.git/hooks/pre-commit"
+if PATH="$NODE_DIRECTORY:/usr/bin:/bin" command -v pre-commit >/dev/null; then
+    printf 'the portability test path unexpectedly provides pre-commit\n' >&2
+    exit 1
+fi
+PATH="$NODE_DIRECTORY:/usr/bin:/bin" run_pre_commit run --hook-stage pre-commit --all-files
