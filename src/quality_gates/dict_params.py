@@ -33,7 +33,15 @@ WRAPPER_TYPES = {
     "FrozenSet",
 }
 
-DICT_NAMES = ("dict", "Dict")
+DICT_NAMES = ("dict", "Dict", "Mapping", "MutableMapping")
+QUALIFIED_DICT_NAMES = {
+    "builtins.dict",
+    "typing.Dict",
+    "typing.Mapping",
+    "typing.MutableMapping",
+    "collections.abc.Mapping",
+    "collections.abc.MutableMapping",
+}
 
 BADGE_PATTERN = re.compile(r"#\s*ALLOW:\s*([\w-]+)")
 
@@ -70,9 +78,24 @@ def _head_name(node: ast.AST) -> str:
     return ""
 
 
+def _qualified_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        value = _qualified_name(node.value)
+        return f"{value}.{node.attr}" if value else ""
+    return ""
+
+
+def _is_dict_name(node: ast.AST) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in DICT_NAMES
+    return _qualified_name(node) in QUALIFIED_DICT_NAMES
+
+
 def _is_dict_subscript(ann: ast.Subscript) -> bool:
     head = _head_name(ann.value)
-    if head in DICT_NAMES:
+    if _is_dict_name(ann.value):
         return True
     if head not in WRAPPER_TYPES:
         return False
@@ -90,7 +113,7 @@ def _is_quoted_dict(text: str) -> bool:
 
 def _is_dict_type(ann: ast.AST) -> bool:
     if isinstance(ann, ast.Name | ast.Attribute):
-        return _head_name(ann) in DICT_NAMES
+        return _is_dict_name(ann)
     if isinstance(ann, ast.Constant) and isinstance(ann.value, str):
         return _is_quoted_dict(ann.value)
     if isinstance(ann, ast.Subscript):
