@@ -33,16 +33,22 @@ private function. A comment must be a TODO, a FIXME or a NOTE.
 `--baseline PATH` is required and has no default. A baseline stored beside an installed
 hook would be shared between repositories and could not be written. Pass `--no-baseline`
 instead to report every violation; the two are mutually exclusive, and so are
-`--no-baseline` and `--update-baseline`.
+`--no-baseline` and either baseline write command.
 
 Generate one for an existing tree with `--update-baseline`. The file grandfathers what
-exists today, so a NEW violation still fails.
+exists today, so a NEW violation still fails. Use `--shrink-baseline` after you remove a
+violation. It lowers matching counts and removes missing fingerprints. It never adds a
+fingerprint, so a new violation still fails. It does not write a baseline when any scanned
+source file cannot be read.
 
 A baseline line is `path`, a tab, `kind`, a tab, twelve hexadecimal digits, a tab, a
 count. The digits are a SHA-1 of the offending TEXT, not of its position: whitespace is
 collapsed, the text is lowercased, and a leading `#` is removed. Moving a comment keeps
-it grandfathered. Editing it does not. A line the gate cannot read in that shape is an
-error, so a hand-edited baseline cannot silently lose entries.
+it grandfathered. Case-only and whitespace-only edits also keep it grandfathered. Editing
+words or punctuation does not. A line the gate cannot read in that shape is an error, so a
+hand-edited baseline cannot silently lose entries. The path cannot be empty. The kind must
+be one this gate reports. The digest must contain twelve lowercase hexadecimal digits. The
+count must be a positive decimal integer.
 
 ### dict-param-check
 

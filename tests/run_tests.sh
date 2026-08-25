@@ -35,6 +35,14 @@ expect_unreadable_marker() {
     rm "$path"
 }
 
+expect_invalid_shrink_baseline() {
+    local label="$1" baseline="$2" source="$3"
+    cp "$baseline" "$baseline.before"
+    expect "$label is rejected" 1 check-inline-comments --baseline "$baseline" --shrink-baseline "$source"
+    expect "$label is not rewritten" 0 cmp "$baseline" "$baseline.before"
+    rm "$baseline.before"
+}
+
 TMP="$(mktemp -d)"
 OTHER="$(mktemp -d)"
 TOOLCHAIN="$(mktemp -d)"
@@ -238,6 +246,9 @@ expect "--no-baseline works without --baseline" 0 check-inline-comments --no-bas
 expect "neither --baseline nor --no-baseline is rejected" 2 check-inline-comments pkg/e.py
 expect "--baseline with --no-baseline is rejected" 2 check-inline-comments --baseline b.txt --no-baseline pkg/e.py
 expect "--update-baseline with --no-baseline is rejected" 2 check-inline-comments --no-baseline --update-baseline pkg/e.py
+expect "--shrink-baseline with --no-baseline is rejected" 2 check-inline-comments --no-baseline --shrink-baseline pkg/e.py
+expect "--shrink-baseline with --update-baseline is rejected" 2 \
+    check-inline-comments --baseline b.txt --shrink-baseline --update-baseline pkg/e.py
 
 echo "== inline comments: baseline contents =="
 mkdir -p grand
@@ -263,11 +274,41 @@ expect "two identical comments are grandfathered twice" 0 check-inline-comments 
 printf 'def f():\n    x = 1  # twice\n    y = 2  # twice\n    z = 3  # twice\n    return x\n' > multi/m.py
 expect "a third copy of a grandfathered comment fails" 1 check-inline-comments --baseline multi.txt multi
 
+mkdir -p shrink
+printf 'def f():\n    x = 1  # keep twice\n    y = 2  # keep twice\n    return x + y\n' > shrink/s.py
+check-inline-comments --baseline shrink.txt --update-baseline shrink >/dev/null 2>&1
+printf 'def f():\n    x = 1  # keep twice\n    return x\n' > shrink/s.py
+expect "--shrink-baseline lowers a fingerprint count" 0 check-inline-comments --baseline shrink.txt --shrink-baseline shrink
+expect "a shrunk fingerprint keeps its reduced count" 0 bash -c 'test "$(cut -f4 "$1")" = 1' bash shrink.txt
+
+mkdir -p removed
+printf 'def f():\n    x = 1  # remove me\n    return x\n' > removed/r.py
+check-inline-comments --baseline removed.txt --update-baseline removed >/dev/null 2>&1
+printf 'def f():\n    return 1\n' > removed/r.py
+expect "--shrink-baseline removes a missing fingerprint" 0 check-inline-comments --baseline removed.txt --shrink-baseline removed
+expect "a missing fingerprint is removed from the baseline" 0 test ! -s removed.txt
+printf 'def f():\n    x = 1  # a new violation\n    return x\n' > removed/r.py
+expect "--shrink-baseline cannot grandfather a new violation" 1 check-inline-comments --baseline removed.txt --shrink-baseline removed
+expect "a new violation still fails after shrinking" 1 check-inline-comments --baseline removed.txt removed
+
 printf 'not a baseline line\n' > bad-baseline.txt
 expect "a malformed baseline line fails" 1 check-inline-comments --baseline bad-baseline.txt multi
 expect_says "the malformed baseline line is located" "bad-baseline.txt:1" check-inline-comments --baseline bad-baseline.txt multi
 printf 'a.py\tinline\tabc123abc123\tmany\n' > bad-count.txt
 expect "a baseline count that is not a number fails" 1 check-inline-comments --baseline bad-count.txt multi
+
+mkdir -p invalid-baseline
+printf 'VALUE = 1\n' > invalid-baseline/clean.py
+printf '\tinline\tabc123abc123\t1\n' > bad-path.txt
+expect_invalid_shrink_baseline "a baseline entry without a path" bad-path.txt invalid-baseline/clean.py
+printf 'invalid-baseline/clean.py\tunsupported\tabc123abc123\t1\n' > bad-kind.txt
+expect_invalid_shrink_baseline "a baseline entry with an unsupported kind" bad-kind.txt invalid-baseline/clean.py
+printf 'invalid-baseline/clean.py\tinline\tabc123abc12g\t1\n' > bad-digest.txt
+expect_invalid_shrink_baseline "a baseline entry with a non-hex digest" bad-digest.txt invalid-baseline/clean.py
+printf 'invalid-baseline/clean.py\tinline\tabc123abc123\t0\n' > zero-count.txt
+expect_invalid_shrink_baseline "a baseline entry with a zero count" zero-count.txt invalid-baseline/clean.py
+printf 'invalid-baseline/clean.py\tinline\tabc123abc123\t-1\n' > negative-count.txt
+expect_invalid_shrink_baseline "a baseline entry with a negative count" negative-count.txt invalid-baseline/clean.py
 
 echo "== scope =="
 mkdir -p empty
@@ -307,6 +348,14 @@ expect "--src-dir widens the dict gate too" 1 dict-param-check --src-dir extra p
 
 echo "== unreadable files =="
 mkdir -p bad
+mkdir -p unreadable-shrink
+printf 'def f():\n    x = 1  # keep me\n    return x\n' > unreadable-shrink/u.py
+check-inline-comments --baseline unreadable-shrink.txt --update-baseline unreadable-shrink >/dev/null 2>&1
+cp unreadable-shrink.txt unreadable-shrink.before
+printf 'def f(:\n' > unreadable-shrink/u.py
+expect "--shrink-baseline rejects an unreadable source" 1 \
+    check-inline-comments --baseline unreadable-shrink.txt --shrink-baseline unreadable-shrink
+expect "an unreadable source leaves the baseline unchanged" 0 cmp unreadable-shrink.txt unreadable-shrink.before
 printf 'def broken(:\n# a comment hidden behind a syntax error\n' > bad/broken.py
 expect "an unparsable file fails the comment gate" 1 check-inline-comments --no-baseline bad/broken.py
 expect_says "the unparsable file is named" "bad/broken.py" check-inline-comments --no-baseline bad/broken.py

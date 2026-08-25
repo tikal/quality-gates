@@ -2,7 +2,8 @@
 
 A baseline grandfathers what already exists, so the rule can land on a repository that does not
 yet obey it. The baseline is keyed on the offending text, so moving a comment keeps it
-grandfathered and editing it does not. A file the gate cannot read is never grandfathered.
+grandfathered and changing its words or punctuation does not. A file the gate cannot read is
+never grandfathered.
 """
 
 from __future__ import annotations
@@ -45,6 +46,8 @@ MESSAGES = {
     UNPARSABLE: "File cannot be read",
 }
 
+BASELINE_KINDS = frozenset((INLINE, LONG_BLOCK, MODULE_DOCSTRING, PRIVATE_DOCSTRING))
+
 
 class BaselineError(ValueError):
     """A baseline file that cannot be read as one entry per line."""
@@ -61,11 +64,11 @@ class Violation(NamedTuple):
     def fingerprint(self) -> str:
         """Identity for the baseline: the file, the kind and the offending text — never the line.
 
-        Moving the text keeps it grandfathered. Editing it does not, so anything you touch is
-        something you must bring up to the rule. `subject` is therefore the text the rule is
-        about in every case — the comment, or the docstring itself. Keying a docstring on its
-        filename or its function name instead would invert this: a rewritten docstring would
-        stay grandfathered while a pure rename would not.
+        Moving the text keeps it grandfathered. Changing its words or punctuation does not, so
+        anything you touch is something you must bring up to the rule. `subject` is therefore the
+        text the rule is about in every case — the comment, or the docstring itself. Keying a
+        docstring on its filename or its function name instead would invert this: a rewritten
+        docstring would stay grandfathered while a pure rename would not.
         """
         normalised = re.sub(r"\s+", " ", self.subject.lstrip("#").strip()).lower()
         digest = hashlib.sha1(normalised.encode()).hexdigest()[:12]
@@ -211,10 +214,19 @@ def read_baseline(path: Path) -> Counter:
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip() or line.startswith("#"):
             continue
-        key, _, count = line.rpartition("\t")
-        if line.count("\t") != 3 or not count.isascii() or not count.isdigit():
+        if line.count("\t") != 3:
             raise BaselineError(f"baseline {path}:{lineno}: expected 'path<TAB>kind<TAB>digest<TAB>count'")
-        entries[key] += int(count)
+        entry_path, kind, digest, count = line.split("\t")
+        if (
+            not entry_path
+            or "\0" in entry_path
+            or any(part in {".", ".."} for part in Path(entry_path).parts)
+            or kind not in BASELINE_KINDS
+            or re.fullmatch(r"[0-9a-f]{12}", digest) is None
+            or re.fullmatch(r"[1-9][0-9]*", count) is None
+        ):
+            raise BaselineError(f"baseline {path}:{lineno}: expected 'path<TAB>kind<TAB>digest<TAB>count'")
+        entries[f"{entry_path}\t{kind}\t{digest}"] += int(count)
     return entries
 
 
@@ -233,6 +245,23 @@ def write_baseline(path: Path, violations: list[Violation], scanned: set[str], s
         }
     )
     kept.update(v.fingerprint for v in violations)
+    body = "\n".join(f"{key}\t{count}" for key, count in sorted(kept.items()))
+    path.write_text(body + "\n" if body else "", encoding="utf-8")
+
+
+def write_shrunk_baseline(path: Path, baseline: Counter, remaining: Counter, scanned: set[str], scan: Scan) -> None:
+    """Remove unmatched scanned entries, reduce matched counts, and keep live entries outside scope.
+
+    The result is a subset of `baseline`: this command only records a repair and cannot
+    grandfather a new violation.
+    """
+    kept = Counter()
+    for key, count in baseline.items():
+        entry_path = key.split("\t", 1)[0]
+        if entry_path in scanned and count > remaining[key]:
+            kept[key] = count - remaining[key]
+        elif entry_path not in scanned and scan.still_scannable(entry_path):
+            kept[key] = count
     body = "\n".join(f"{key}\t{count}" for key, count in sorted(kept.items()))
     path.write_text(body + "\n" if body else "", encoding="utf-8")
 
@@ -280,7 +309,15 @@ def _parse_arguments() -> argparse.Namespace:
     grandfathering.add_argument(
         "--no-baseline", action="store_true", help="report every violation, grandfathering none"
     )
-    parser.add_argument("--update-baseline", action="store_true", help="rewrite the baseline from current state")
+    baseline_actions = parser.add_mutually_exclusive_group()
+    baseline_actions.add_argument(
+        "--update-baseline", action="store_true", help="rewrite the baseline from current state"
+    )
+    baseline_actions.add_argument(
+        "--shrink-baseline",
+        action="store_true",
+        help="remove fixed violations from the baseline without adding current violations",
+    )
     parser.add_argument(
         "--project-root",
         type=Path,
@@ -302,8 +339,8 @@ def _parse_arguments() -> argparse.Namespace:
         help="an extra directory name to skip anywhere in a path, added to the defaults; repeatable",
     )
     arguments = parser.parse_args()
-    if arguments.update_baseline and arguments.no_baseline:
-        parser.error("--update-baseline needs a --baseline to write, so it cannot be used with --no-baseline")
+    if (arguments.update_baseline or arguments.shrink_baseline) and arguments.no_baseline:
+        parser.error("a baseline write needs --baseline, so it cannot be used with --no-baseline")
     for path in arguments.paths:
         if not path.exists():
             parser.error(f"Path {path} does not exist")
@@ -325,13 +362,21 @@ def _judge(arguments: argparse.Namespace, scan: Scan, violations: list[Violation
     if arguments.no_baseline:
         return report(gradable, unreadable, Counter(), len(scanned), 0)
 
-    remaining = read_baseline(arguments.baseline)
+    baseline = read_baseline(arguments.baseline)
+    remaining = baseline.copy()
     new = []
     for violation in gradable:
         if remaining[violation.fingerprint] > 0:
             remaining[violation.fingerprint] -= 1
         else:
             new.append(violation)
+
+    if arguments.shrink_baseline:
+        if unreadable:
+            return report(new, unreadable, Counter(), len(scanned), len(gradable) - len(new))
+        write_shrunk_baseline(arguments.baseline, baseline, remaining, scanned, scan)
+        print(f"Baseline shrunk: {arguments.baseline}", file=sys.stderr)
+        return report(new, unreadable, Counter(), len(scanned), len(gradable) - len(new))
 
     stale = Counter({key: n for key, n in remaining.items() if n > 0 and key.split("\t", 1)[0] in scanned})
     return report(new, unreadable, stale, len(scanned), len(gradable) - len(new))
