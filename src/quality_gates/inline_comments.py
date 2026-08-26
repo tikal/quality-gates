@@ -345,7 +345,7 @@ def _judge(arguments: argparse.Namespace, scan: Scan, violations: list[Violation
 
     if arguments.update_baseline:
         write_baseline(arguments.baseline, gradable, scanned, scan)
-        print(f"Baseline written: {len(gradable)} entries → {arguments.baseline}", file=sys.stderr)
+        print(f"Baseline written: {len(gradable)} entries → {arguments.baseline} scope={len(scanned)}", file=sys.stderr)
         if not unreadable:
             return 0
         _print_unreadable(unreadable)
