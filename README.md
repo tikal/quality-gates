@@ -7,7 +7,7 @@ command-line argument, so one copy serves many repositories.
 
 ```yaml
 - repo: https://github.com/tikal/quality-gates
-  rev: v0.1.0
+  rev: 4a4e9bbb8007e1d55c9d677ea4dd36faf197e8e9  # v0.1.0
   hooks:
     - id: check-inline-comments
       args: [--baseline, .quality/inline-comments.txt]
@@ -20,6 +20,14 @@ command-line argument, so one copy serves many repositories.
     - id: check-duplication
       args: [--root, ., --format, "python,bash", --ext, '\.(py|sh)$', --min-lines, "5", --min-tokens, "50", --select, tree, --threshold, "0", --strict-scope]
 ```
+
+Pin this repository to a commit, not a tag. Each hook runs code when a consumer commits.
+A tag can be moved, which changes the code consumers run without a reviewed change in their repository.
+
+`v0.1.0` is an annotated tag. `git ls-remote` for `refs/tags/v0.1.0` returns the tag object, not
+the commit. In a checkout, peel the tag with `git rev-list -n 1 v0.1.0` and pin the resulting
+commit. `pre-commit autoupdate` can replace the commit pin with a tag. Review its changes and
+restore the intended commit pin before you commit the update.
 
 Each hook ships a working default `args:`, so `pre-commit try-repo` runs without configuration.
 The defaults are deliberately strict: the marker budget defaults to `--ceiling 0`, so a

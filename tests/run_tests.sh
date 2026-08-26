@@ -43,6 +43,12 @@ expect_invalid_shrink_baseline() {
     rm "$baseline.before"
 }
 
+readme_example_pins_reviewed_commit() {
+    python -c \
+        'import re, sys; from pathlib import Path; example = re.search(r"^```yaml$\n(.*?)^```$", Path(sys.argv[1]).read_text(), re.MULTILINE | re.DOTALL); assert example, "missing YAML example"; revision = re.search(r"^\s+rev:\s+([^\s#]+)", example.group(1), re.MULTILINE); assert revision, "missing rev"; assert revision.group(1) == "4a4e9bbb8007e1d55c9d677ea4dd36faf197e8e9", revision.group(1)' \
+        "$1"
+}
+
 TMP="$(mktemp -d)"
 OTHER="$(mktemp -d)"
 TOOLCHAIN="$(mktemp -d)"
@@ -54,6 +60,12 @@ PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 expect "the Tree-sitter core support cap is declared" 0 python -c \
     'import tomllib; assert "tree-sitter>=0.25,<0.27" in tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]'
+expect "the README consumer example pins the reviewed commit" 0 \
+    readme_example_pins_reviewed_commit "$PACKAGE_ROOT/README.md"
+printf '```yaml\n- repo: https://github.com/tikal/quality-gates\n  rev: 0123456789abcdef0123456789abcdef01234567\n```\n' \
+    > "$TMP/fake-readme.md"
+expect "the README consumer example rejects a fake commit" 1 \
+    readme_example_pins_reviewed_commit "$TMP/fake-readme.md"
 
 npm install --prefix "$TOOLCHAIN" --cache "$TOOLCHAIN/cache" --no-save "$PACKAGE_ROOT" jscpd@5.0.16 >/dev/null 2>&1 || exit 1
 PATH="$TOOLCHAIN/node_modules/.bin:$PATH"
