@@ -502,6 +502,16 @@ expect "undecodable bytes fail the comment gate" 1 check-inline-comments --no-ba
 expect "undecodable bytes fail the dict gate" 1 dict-param-check bad/rawbytes.py
 
 echo "== dict params =="
+mkdir -p dict-baseline
+printf 'def existing(value: dict) -> int:\n    return 1\n' > dict-baseline/signatures.py
+expect "a dict baseline can be written" 0 \
+    dict-param-check --baseline dict-baseline.txt --update-baseline dict-baseline
+expect "a dict baseline grandfathers an existing annotation" 0 \
+    dict-param-check --baseline dict-baseline.txt dict-baseline
+printf 'def existing(value: dict) -> int:\n    return 1\n\ndef added(value: dict) -> int:\n    return 1\n' \
+    > dict-baseline/signatures.py
+expect "a NEW signature still fails against a dict baseline" 1 \
+    dict-param-check --baseline dict-baseline.txt dict-baseline
 printf 'def pub(x: dict) -> int:\n    return 1\n' > pkg/f.py
 expect "a public dict parameter fails" 1 dict-param-check pkg/f.py
 printf 'def pub(x: dict) -> int:  # ALLOW: dict-param\n    return 1\n' > pkg/g.py

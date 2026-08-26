@@ -12,7 +12,7 @@ command-line argument, so one copy serves many repositories.
     - id: check-inline-comments
       args: [--baseline, .quality/inline-comments.txt]
     - id: dict-param-check
-      args: [src]
+      args: [--baseline, .quality/dict-params.txt, src]
     - id: check-marker-budget
       args: [--ceiling, "20", --per-file, "big_module.py=15"]
     - id: check-dead-code
@@ -81,11 +81,21 @@ canonical qualified forms such as `builtins.dict[...]`, `typing.Dict[...]`, and
 `"dict[str, int]"`. Other qualified names such as `foreign.Mapping` are not
 treated as mapping annotations.
 
+`--baseline PATH` is optional. Without it, the gate reports every violation. Use
+`--update-baseline` to record existing unbadged violations, and use
+`--shrink-baseline` after a repair. A baseline still fails a NEW signature. Its
+fingerprint contains the path, `dict-param` or `dict-return`, and a SHA-1 of the
+annotation text. This keeps a moved signature grandfathered, but a changed
+annotation or an additional matching signature fails. `--no-baseline` is explicit
+strict mode. It cannot be combined with either baseline write command.
+
 To keep one dict, put `# ALLOW: dict-param` or `# ALLOW: dict-return` on the line where
 the ANNOTATION ENDS. On a one-line signature every annotation ends on that one line, so
 ONE badge there exempts every dict parameter of that signature. Split the signature over
 several lines to badge one parameter alone. The badge name must match exactly:
-`# ALLOW: dict-parameter-later` does not suppress `dict-param`. There is no baseline.
+`# ALLOW: dict-parameter-later` does not suppress `dict-param`. An ALLOW badge is
+exempt before baseline matching. It remains a deliberate permanent exemption, not
+grandfathered debt.
 
 ### check-marker-budget
 

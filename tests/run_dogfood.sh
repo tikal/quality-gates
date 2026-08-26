@@ -33,7 +33,7 @@ run_pre_commit install --install-hooks
 
 FAKE_BIN="$TEMPORARY/fake-bin"
 mkdir "$FAKE_BIN"
-printf '#!/bin/sh\nlines=\noutput=\nwhile [ "$#" -gt 0 ]; do\n    if [ "$1" = "--min-lines" ]; then\n        lines="$2"\n    fi\n    if [ "$1" = "--output" ]; then\n        output="$2"\n    fi\n    shift\ndone\nmkdir -p "$output"\nif [ "$lines" = 1 ]; then\n    printf "{\\\"statistics\\\": {\\\"total\\\": {\\\"sources\\\": 11}}, \\\"duplicates\\\": %%s}" "$SCOPE_CLONES" > "$output/jscpd-report.json"\n    exit 1\nfi\nprintf "{\\\"statistics\\\": {\\\"total\\\": {\\\"sources\\\": 11}}, \\\"duplicates\\\": []}" > "$output/jscpd-report.json"\n' > "$FAKE_BIN/jscpd"
+printf '#!/bin/sh\nlines=\noutput=\nwhile [ "$#" -gt 0 ]; do\n    if [ "$1" = "--min-lines" ]; then\n        lines="$2"\n    fi\n    if [ "$1" = "--output" ]; then\n        output="$2"\n    fi\n    shift\ndone\nmkdir -p "$output"\nif [ "$lines" = 1 ]; then\n    printf "{\\\"statistics\\\": {\\\"total\\\": {\\\"sources\\\": 12}}, \\\"duplicates\\\": %%s}" "$SCOPE_CLONES" > "$output/jscpd-report.json"\n    exit 1\nfi\nprintf "{\\\"statistics\\\": {\\\"total\\\": {\\\"sources\\\": 12}}, \\\"duplicates\\\": []}" > "$output/jscpd-report.json"\n' > "$FAKE_BIN/jscpd"
 chmod +x "$FAKE_BIN/jscpd"
 
 run_fake_duplication() {
