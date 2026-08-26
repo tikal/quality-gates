@@ -54,10 +54,12 @@ mkdir -p "$CONSUMER"
 git -C "$CONSUMER" init -q
 git -C "$CONSUMER" config user.email test@example.com
 git -C "$CONSUMER" config user.name test
-printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-inline-comments\n        args: [--no-baseline, inline.py]\n      - id: dict-param-check\n        args: [dict.py]\n      - id: check-marker-budget\n      - id: check-duplication\n' \
+printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-inline-comments\n        args: [--no-baseline, inline.py]\n      - id: dict-param-check\n        args: [dict.py]\n      - id: check-marker-budget\n      - id: check-dead-code\n        args: [--path, dead.py, --min-confidence, "80"]\n      - id: check-duplication\n' \
     "$HOOK_REPOSITORY" "$(git -C "$HOOK_REPOSITORY" rev-parse HEAD)" > "$CONSUMER/.pre-commit-config.yaml"
 printf 'VALUE = 1\n' > "$CONSUMER/inline.py"
 printf 'def public(value: int) -> int:\n    return value\n' > "$CONSUMER/dict.py"
+printf 'def used() -> int:\n    return 1\n\nused()\n' > "$CONSUMER/dead.py"
+printf '[project]\nname = "consumer"\nversion = "0.0.0"\nrequires-python = ">=3.11"\n\n[tool.vulture]\nexclude = ["dead.py"]\n' > "$CONSUMER/pyproject.toml"
 git -C "$CONSUMER" add -A
 git -C "$CONSUMER" commit -qm clean
 
@@ -70,6 +72,7 @@ echo '== packaged pre-commit hooks =='
 expect_pass "check-inline-comments allows clean source" check-inline-comments
 expect_pass "dict-param-check allows a typed signature" dict-param-check
 expect_pass "check-marker-budget allows no markers" check-marker-budget
+expect_pass "check-dead-code allows used code" check-dead-code
 expect_pass "check-duplication allows distinct source" check-duplication
 
 printf 'VALUE = 1  # plain comment\n' > "$CONSUMER/inline.py"
@@ -83,6 +86,10 @@ expect_failure "dict-param-check rejects a dict parameter" dict-param-check "val
 printf '# TODO: remove this marker\n' > "$CONSUMER/marker.py"
 git -C "$CONSUMER" add marker.py
 expect_failure "check-marker-budget rejects a marker" check-marker-budget "repo total: 1 marker blocks"
+
+printf 'def used() -> int:\n    return 1\n    unreachable = 2\n\nused()\n' > "$CONSUMER/dead.py"
+git -C "$CONSUMER" add dead.py
+expect_failure "consumer Vulture configuration cannot narrow dead-code scope" check-dead-code "unreachable code"
 
 printf 'def alpha():\n    value_01 = 1\n    value_02 = 2\n    value_03 = 3\n    value_04 = 4\n    value_05 = 5\n    value_06 = 6\n    value_07 = 7\n    value_08 = 8\n    value_09 = 9\n    value_10 = 10\n    value_11 = 11\n    value_12 = 12\n    value_13 = 13\n    value_14 = 14\n    value_15 = 15\n    return value_01 + value_02 + value_03 + value_04 + value_05 + value_06 + value_07 + value_08 + value_09 + value_10 + value_11 + value_12 + value_13 + value_14 + value_15\n' > "$CONSUMER/clone_a.py"
 printf 'def beta():\n    value_01 = 1\n    value_02 = 2\n    value_03 = 3\n    value_04 = 4\n    value_05 = 5\n    value_06 = 6\n    value_07 = 7\n    value_08 = 8\n    value_09 = 9\n    value_10 = 10\n    value_11 = 11\n    value_12 = 12\n    value_13 = 13\n    value_14 = 14\n    value_15 = 15\n    return value_01 + value_02 + value_03 + value_04 + value_05 + value_06 + value_07 + value_08 + value_09 + value_10 + value_11 + value_12 + value_13 + value_14 + value_15\n' > "$CONSUMER/clone_b.py"

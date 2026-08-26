@@ -47,7 +47,9 @@ TMP="$(mktemp -d)"
 OTHER="$(mktemp -d)"
 TOOLCHAIN="$(mktemp -d)"
 MARKER_SKIPS="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS"' EXIT
+DEAD_CODE_BIN="$(mktemp -d)"
+DEAD_CODE_SOURCE="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 expect "the Tree-sitter core support cap is declared" 0 python -c \
@@ -84,6 +86,64 @@ git -C "$MARKER_SKIPPED_ROOT" add -A && git -C "$MARKER_SKIPPED_ROOT" commit -qm
 
 cd "$TMP" || exit 1
 git init -q . && git config user.email t@t && git config user.name t
+
+printf '#!/bin/sh\nif [ -n "$VULTURE_OPTIONS" ]; then\n    if [ "$1" != "--config" ] || [ ! -f "$2" ]; then\n        exit 1\n    fi\n    shift 2\n    if [ "$*" != "$VULTURE_OPTIONS" ]; then\n        exit 1\n    fi\nfi\nfor argument in "$@"; do\n    case "$argument" in\n        *dead.py) printf "dead.py:1: unused function\\n"; exit 3 ;;\n    esac\ndone\nexit 0\n' > "$DEAD_CODE_BIN/vulture"
+chmod +x "$DEAD_CODE_BIN/vulture"
+
+echo "== dead code =="
+mkdir -p "$DEAD_CODE_SOURCE/empty" "$DEAD_CODE_SOURCE/generated" "$DEAD_CODE_SOURCE/mixed/generated" \
+    "$DEAD_CODE_SOURCE/hidden-only/.private" "$DEAD_CODE_SOURCE/hidden-real/.private"
+printf 'def unused():\n    return 1\n' > "$DEAD_CODE_SOURCE/dead.py"
+printf 'VALUE = 1\n' > "$DEAD_CODE_SOURCE/clean.py"
+printf 'OTHER = 2\n' > "$DEAD_CODE_SOURCE/clean-two.py"
+printf 'GENERATED = 3\n' > "$DEAD_CODE_SOURCE/generated/code.py"
+printf 'VISIBLE = 4\n' > "$DEAD_CODE_SOURCE/mixed/visible.py"
+printf 'GENERATED = 5\n' > "$DEAD_CODE_SOURCE/mixed/generated/code.py"
+printf 'HIDDEN = 6\n' > "$DEAD_CODE_SOURCE/hidden-only/.hidden.py"
+printf 'PRIVATE = 7\n' > "$DEAD_CODE_SOURCE/hidden-only/.private/code.py"
+printf 'def used() -> int:\n    return 1\n\nused()\n' > "$DEAD_CODE_SOURCE/hidden-real/.private/clean.py"
+expect "dead code is reported" 1 env PATH="$DEAD_CODE_BIN:$PATH" python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/dead.py" --min-confidence 80
+expect_says "a dead-code report names its source" "dead.py" env PATH="$DEAD_CODE_BIN:$PATH" \
+    python -m quality_gates.dead_code --path "$DEAD_CODE_SOURCE/dead.py"
+expect "dead-code options are forwarded" 0 env PATH="$DEAD_CODE_BIN:$PATH" \
+    VULTURE_OPTIONS="$DEAD_CODE_SOURCE/clean.py $DEAD_CODE_SOURCE/clean-two.py --min-confidence 80 --sort-by-size --ignore-names unused --exclude */ignored.py" \
+    python -m quality_gates.dead_code --path "$DEAD_CODE_SOURCE/clean.py" --path "$DEAD_CODE_SOURCE/clean-two.py" \
+    --ignore-names unused --exclude '*/ignored.py'
+expect "a bare exclusion is normalized for Vulture" 0 env PATH="$DEAD_CODE_BIN:$PATH" \
+    VULTURE_OPTIONS="$DEAD_CODE_SOURCE/mixed --min-confidence 80 --sort-by-size --exclude *generated*" \
+    python -m quality_gates.dead_code --path "$DEAD_CODE_SOURCE/mixed" --exclude generated
+expect_says "a bare exclusion keeps visible mixed source in scope" "scope=1" env PATH="$DEAD_CODE_BIN:$PATH" \
+    python -m quality_gates.dead_code --path "$DEAD_CODE_SOURCE/mixed" --exclude generated
+expect "zero minimum confidence is accepted" 0 env PATH="$DEAD_CODE_BIN:$PATH" python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/clean.py" --min-confidence 0
+expect "maximum confidence is accepted" 0 env PATH="$DEAD_CODE_BIN:$PATH" python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/clean.py" --min-confidence 100
+expect "a negative minimum confidence is rejected" 2 env PATH="$DEAD_CODE_BIN:$PATH" python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/clean.py" --min-confidence -1
+expect "an over-maximum confidence is rejected" 2 env PATH="$DEAD_CODE_BIN:$PATH" python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/clean.py" --min-confidence 101
+expect_says "a clean dead-code scan reports its scope" "scope=2" env PATH="$DEAD_CODE_BIN:$PATH" \
+    python -m quality_gates.dead_code --path "$DEAD_CODE_SOURCE/clean.py" --path "$DEAD_CODE_SOURCE/clean-two.py"
+expect "a missing dead-code path fails" 2 env PATH="$DEAD_CODE_BIN:$PATH" python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/missing.py"
+expect_says "a missing dead-code path is named" "$DEAD_CODE_SOURCE/missing.py" env PATH="$DEAD_CODE_BIN:$PATH" \
+    python -m quality_gates.dead_code --path "$DEAD_CODE_SOURCE/missing.py"
+expect "a zero-file dead-code scope fails" 1 env PATH="$DEAD_CODE_BIN:$PATH" python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/empty"
+expect "a bare exclusion that leaves no source fails" 1 env PATH="$DEAD_CODE_BIN:$PATH" python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/generated" --exclude generated
+expect "a hidden-only source path is scanned" 0 env PATH="$DEAD_CODE_BIN:$PATH" python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/hidden-only"
+expect "Vulture scans a hidden-only directory" 0 env PYTHONPATH="$PACKAGE_ROOT/src" \
+    uv run --isolated --no-project --with vulture==2.14.0 python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/hidden-real"
+expect_says "a hidden Vulture source is counted" "scope=1" env PYTHONPATH="$PACKAGE_ROOT/src" \
+    uv run --isolated --no-project --with vulture==2.14.0 python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/hidden-real"
+expect "an all-excluded dead-code scope fails" 1 env PATH="$DEAD_CODE_BIN:$PATH" python -m quality_gates.dead_code \
+    --path "$DEAD_CODE_SOURCE/clean.py" --exclude '*/clean.py'
+expect "dead-code requires a path" 2 env PATH="$DEAD_CODE_BIN:$PATH" python -m quality_gates.dead_code
 
 echo "== marker budget =="
 mkdir -p pkg

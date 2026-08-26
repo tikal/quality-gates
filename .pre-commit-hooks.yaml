@@ -28,6 +28,16 @@
   pass_filenames: false
   require_serial: true
 
+- id: check-dead-code
+  name: check dead Python code
+  description: Fail when Vulture finds unused code in hook-declared paths. Consumer [tool.vulture] settings are ignored.
+  entry: check-dead-code
+  language: python
+  additional_dependencies: [vulture==2.14.0]
+  args: [--path, src, --path, tests, --min-confidence, "80"]
+  pass_filenames: false
+  require_serial: true
+
 - id: check-duplication
   name: check copy-paste duplication
   description: Fail when jscpd finds a clone or reads less than the declared strict scope.
