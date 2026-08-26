@@ -154,9 +154,10 @@ report.
 ## Badges and skipped directories
 
 `# ALLOW:` and `# TYPE:` are both badges. A badge is a machine-readable declaration, not
-prose, so it is exempt from the comment rules and from every budget. No gate in this
-package consumes `# TYPE:`; it is recognised so a repository that uses it for its own
-tooling is not forced to choose between that tool and this one.
+prose. `# TYPE:` is exempt from the comment rules and from every budget.
+`# TYPE:` marks a deliberate typing decision for a repository's type tooling. No gate in this
+package consumes it.
+The exemption remains for downstream compatibility because a downstream repository relies on it.
 
 `check-inline-comments`, `dict-param-check`, and `check-marker-budget` skip `venv`, `.venv`,
 `node_modules`, `__pycache__` and `_generated` anywhere in a path. `_generated` is in that list

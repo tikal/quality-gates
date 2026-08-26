@@ -60,6 +60,12 @@ readme_example_pins_reviewed_commit() {
         "$1"
 }
 
+readme_documents_type_badge() {
+    python -c \
+        'import sys; from pathlib import Path; readme = Path(sys.argv[1]).read_text(); assert "`# TYPE:` is exempt from the comment rules and from every budget." in readme, "missing TYPE badge exemption"; assert "`# TYPE:` marks a deliberate typing decision for a repository\x27s type tooling." in readme, "missing TYPE badge purpose"; assert "The exemption remains for downstream compatibility because a downstream repository relies on it." in readme, "missing TYPE badge compatibility rationale"' \
+        "$1"
+}
+
 TMP="$(mktemp -d)"
 OTHER="$(mktemp -d)"
 TOOLCHAIN="$(mktemp -d)"
@@ -74,6 +80,20 @@ expect "the Tree-sitter core support cap is declared" 0 python -c \
     'import tomllib; assert "tree-sitter>=0.25,<0.27" in tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]'
 expect "the README consumer example pins the reviewed commit" 0 \
     readme_example_pins_reviewed_commit "$PACKAGE_ROOT/README.md"
+expect "the README documents the TYPE badge exemption" 0 \
+    readme_documents_type_badge "$PACKAGE_ROOT/README.md"
+printf '# TYPE: records a deliberate typing decision for repository tooling.\nIt remains for downstream compatibility.\n' \
+    > "$TMP/type-badge-without-exemption.md"
+expect "the README docs test rejects a TYPE badge without its exemption claim" 1 \
+    readme_documents_type_badge "$TMP/type-badge-without-exemption.md"
+printf '`# TYPE:` is exempt from the comment rules and from every budget.\n# TYPE: does not mark a deliberate typing decision for a repository.\nThe exemption remains for downstream compatibility because a downstream repository relies on it.\n' \
+    > "$TMP/type-badge-with-negated-purpose.md"
+expect "the README docs test rejects a negated TYPE badge purpose" 1 \
+    readme_documents_type_badge "$TMP/type-badge-with-negated-purpose.md"
+printf '%b' '\140# TYPE:\140 is exempt from the comment rules and from every budget.\n\140# TYPE:\140 marks a deliberate typing decision for a repository\x27s type tooling.\nThe exemption does not remain for downstream compatibility.\n' \
+    > "$TMP/type-badge-with-negated-compatibility.md"
+expect "the README docs test rejects a negated TYPE badge compatibility rationale" 1 \
+    readme_documents_type_badge "$TMP/type-badge-with-negated-compatibility.md"
 printf '```yaml\n- repo: https://github.com/tikal/quality-gates\n  rev: 0123456789abcdef0123456789abcdef01234567\n```\n' \
     > "$TMP/fake-readme.md"
 expect "the README consumer example rejects a fake commit" 1 \
