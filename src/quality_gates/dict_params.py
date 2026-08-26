@@ -11,10 +11,12 @@ import argparse
 import ast
 import re
 import sys
+from collections import Counter
 from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
+from quality_gates import baseline
 from quality_gates.discovery import (
     DEFAULT_SOURCE_DIRECTORIES,
     SKIPPED_DIRECTORIES,
@@ -50,6 +52,10 @@ QUALIFIED_DICT_NAMES = {
 
 BADGE_PATTERN = re.compile(r"#\s*ALLOW:\s*([\w-]+)")
 
+PARAMETER = "dict-param"
+RETURN = "dict-return"
+BASELINE_KINDS = frozenset((PARAMETER, RETURN))
+
 BADGE_ADVICE = (
     "Consider using @dataclass, TypedDict or BaseModel. To keep one, put `# ALLOW: dict-param` or "
     "`# ALLOW: dict-return` ON THE LINE WHERE THE ANNOTATION ENDS."
@@ -62,6 +68,13 @@ class Finding(NamedTuple):
     col: int
     func: str
     param: str
+    kind: str
+    subject: str
+
+    @property
+    def fingerprint(self) -> str:
+        """Identity for the baseline: the signature path, annotation kind, and annotation text."""
+        return baseline.fingerprint(self.path, self.kind, self.subject)
 
 
 class Unreadable(NamedTuple):
@@ -185,16 +198,30 @@ class DictParamAnalyzer(ast.NodeVisitor):
             return
         if _has_badge(self._badge_line(arg.annotation), "dict-param"):
             return
-        subject = f"{arg.arg}: {_annotation_text(arg.annotation)}"
-        self.findings.append(Finding(self.path, arg.lineno, arg.col_offset + 1, node.name, subject))
+        annotation = _annotation_text(arg.annotation)
+        self.findings.append(
+            Finding(
+                self.path, arg.lineno, arg.col_offset + 1, node.name, f"{arg.arg}: {annotation}", PARAMETER, annotation
+            )
+        )
 
     def _check_return(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         if not node.returns or not _is_dict_type(node.returns):
             return
         if _has_badge(self._badge_line(node.returns), "dict-return"):
             return
-        subject = f"-> {_annotation_text(node.returns)}"
-        self.findings.append(Finding(self.path, node.returns.lineno, node.returns.col_offset + 1, node.name, subject))
+        annotation = _annotation_text(node.returns)
+        self.findings.append(
+            Finding(
+                self.path,
+                node.returns.lineno,
+                node.returns.col_offset + 1,
+                node.name,
+                f"-> {annotation}",
+                RETURN,
+                annotation,
+            )
+        )
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         if node.name.startswith("_"):
@@ -207,52 +234,115 @@ class DictParamAnalyzer(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def analyze_file(file_path: Path) -> list[Finding]:
+def analyze_file(file_path: Path, anchor: str) -> list[Finding]:
     """Every dict annotation in a public signature in one file.
 
     Raises UnreadableSource when the file cannot be decoded or parsed. A file this gate cannot
     read is a violation for the caller to report, never a file the gate quietly passes.
     """
     source = read_source(file_path)
-    analyzer = DictParamAnalyzer(str(file_path), source.splitlines())
+    analyzer = DictParamAnalyzer(anchor, source.splitlines())
     analyzer.visit(parse_source(source))
     return analyzer.findings
 
 
-def analyze(paths: Sequence[Path]) -> Report:
+def analyze(paths: Sequence[Path], project_root: Path) -> Report:
     """Every dict finding across `paths`, plus every file that could not be read at all."""
     findings: list[Finding] = []
     unreadable: list[Unreadable] = []
     for file_path in paths:
         try:
-            findings.extend(analyze_file(file_path))
+            findings.extend(analyze_file(file_path, _anchor(file_path, project_root)))
         except UnreadableSource as exc:
-            unreadable.append(Unreadable(str(file_path), exc.line, exc.reason))
+            unreadable.append(Unreadable(_anchor(file_path, project_root), exc.line, exc.reason))
     return Report(findings, unreadable)
 
 
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check for dict annotations in public signatures.")
     parser.add_argument("paths", nargs="*", default=[Path(".")], type=Path)
+    baseline.add_arguments(parser, required=False)
+    parser.add_argument(
+        "--project-root",
+        type=Path,
+        default=Path.cwd(),
+        help="root that every reported path is named relative to (default: current directory)",
+    )
     add_scope_arguments(parser)
-    return parser.parse_args()
+    arguments = parser.parse_args()
+    baseline.validate_arguments(parser, arguments)
+    return arguments
 
 
 def _scan(paths: Sequence[Path], src_dirs: Sequence[str], skip_dirs: Collection[str]) -> list[Path]:
     return [found for path in paths for found in python_files_under(path, src_dirs, skip_dirs)]
 
 
-def _print_failures(report: Report) -> int:
-    if report.findings:
+def _anchor(path: Path, project_root: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(project_root).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def _report(new: list[Finding], unreadable: list[Unreadable], stale: Counter[str], checked: int, baselined: int) -> int:
+    if not new and not unreadable and not stale:
+        grandfathered = f" ({baselined} grandfathered)" if baselined else ""
+        print(
+            f"No dict type annotations in public signatures across {checked} "
+            f"Python files{grandfathered} scope={checked}"
+        )
+        return 0
+
+    if new:
         print("Dict type annotations found in public method parameters and return types:")
         print(f"{BADGE_ADVICE}\n")
-        for found in sorted(report.findings):
+        for found in sorted(new):
             print(f"  {found.path}:{found.line}:{found.col} {found.func}({found.param})")
-    if report.unreadable:
-        print(f"\n{len(report.unreadable)} file(s) could not be read. A file a gate cannot read is a violation:")
-        for entry in sorted(report.unreadable):
+    if unreadable:
+        print(f"\n{len(unreadable)} file(s) could not be read. A file a gate cannot read is a violation:")
+        for entry in sorted(unreadable):
             print(f"  {entry.path}:{entry.line} - File cannot be read: {entry.reason}")
+    if stale:
+        print(f"\n{sum(stale.values())} baseline entries no longer match any violation.")
+        for key, count in sorted(stale.items()):
+            print(f"  stale x{count}: {key}")
+        print("\nRun with --update-baseline to shrink the baseline.")
     return 1
+
+
+def _judge(arguments: argparse.Namespace, report: Report, scanned: set[str], skipped: Collection[str]) -> int:
+    if arguments.update_baseline:
+        baseline.write(
+            arguments.baseline,
+            (finding.fingerprint for finding in report.findings),
+            scanned,
+            baseline.Scope(arguments.project_root.resolve(), skipped),
+            BASELINE_KINDS,
+        )
+        print(f"Baseline written: {len(report.findings)} entries -> {arguments.baseline} scope={len(scanned)}")
+        return _report([], report.unreadable, Counter(), len(scanned), 0)
+
+    if arguments.baseline is None:
+        return _report(report.findings, report.unreadable, Counter(), len(scanned), 0)
+
+    entries = baseline.read(arguments.baseline, BASELINE_KINDS)
+    new, remaining = baseline.classify(report.findings, entries, lambda finding: finding.fingerprint)
+    baselined = len(report.findings) - len(new)
+    if arguments.shrink_baseline:
+        if report.unreadable:
+            return _report(new, report.unreadable, Counter(), len(scanned), baselined)
+        baseline.shrink(
+            arguments.baseline,
+            entries,
+            remaining,
+            scanned,
+            baseline.Scope(arguments.project_root.resolve(), skipped),
+        )
+        print(f"Baseline shrunk: {arguments.baseline}")
+        return _report(new, report.unreadable, Counter(), len(scanned), baselined)
+    return _report(new, report.unreadable, baseline.stale(remaining, scanned), len(scanned), baselined)
 
 
 def main() -> int:
@@ -276,12 +366,15 @@ def main() -> int:
         )
         return 1
 
-    report = analyze(scanned)
-    if report.findings or report.unreadable:
-        return _print_failures(report)
-
-    print(f"No dict type annotations in public signatures across {len(scanned)} Python files scope={len(scanned)}")
-    return 0
+    project_root = arguments.project_root.resolve()
+    report = analyze(scanned, project_root)
+    scanned_paths = {_anchor(path, project_root) for path in scanned}
+    skipped = SKIPPED_DIRECTORIES | frozenset(arguments.skip_dir)
+    try:
+        return _judge(arguments, report, scanned_paths, skipped)
+    except baseline.BaselineError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

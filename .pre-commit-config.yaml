@@ -5,7 +5,7 @@ repos:
       - id: check-inline-comments
         args: [--no-baseline, src, tests]
       - id: dict-param-check
-        args: [src, tests]
+        args: [--baseline, .quality/dict-params.txt, src, tests]
       - id: check-marker-budget
         args: [--ceiling, "0"]
       - id: check-dead-code

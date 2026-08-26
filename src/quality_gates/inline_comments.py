@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import hashlib
 import re
 import sys
 import tokenize
@@ -20,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
+from quality_gates import baseline
 from quality_gates.discovery import (
     DEFAULT_SOURCE_DIRECTORIES,
     SKIPPED_DIRECTORIES,
@@ -54,10 +54,6 @@ MESSAGES = {
 BASELINE_KINDS = frozenset((INLINE, LONG_BLOCK, MODULE_DOCSTRING, PRIVATE_DOCSTRING))
 
 
-class BaselineError(ValueError):
-    """A baseline file that cannot be read as one entry per line."""
-
-
 class Violation(NamedTuple):
     path: str
     line: int
@@ -75,9 +71,7 @@ class Violation(NamedTuple):
         docstring on its filename or its function name instead would invert this: a rewritten
         docstring would stay grandfathered while a pure rename would not.
         """
-        normalised = re.sub(r"\s+", " ", self.subject.lstrip("#").strip()).lower()
-        digest = hashlib.sha1(normalised.encode()).hexdigest()[:12]
-        return f"{self.path}\t{self.kind}\t{digest}"
+        return baseline.fingerprint(self.path, self.kind, self.subject)
 
     def render(self) -> str:
         """One reportable line, with the offending text truncated to stay readable."""
@@ -185,16 +179,6 @@ class Scan:
         except ValueError:
             return resolved.as_posix()
 
-    def still_scannable(self, relative: str) -> bool:
-        """True when a path a baseline entry names is still a file this gate would read.
-
-        An entry for a deleted or newly excluded file can never be scanned again, so keeping it
-        would strand it in the baseline forever — `--update-baseline` could not reach it, and the
-        stale check would not either, because a file that is never scanned is never missed.
-        """
-        candidate = self.project_root / relative
-        return candidate.exists() and not set(self.skipped_directories).intersection(candidate.parts)
-
     def collect(self, paths: Sequence[Path]) -> tuple[list[Violation], set[str]]:
         """Every violation under `paths`, and the anchored name of every file that was read."""
         py_files: list[Path] = []
@@ -205,70 +189,6 @@ class Scan:
         for py_file in py_files:
             violations.extend(check_file(py_file, self.anchored(py_file)))
         return violations, {self.anchored(f) for f in py_files}
-
-
-def read_baseline(path: Path) -> Counter:
-    """The grandfathered fingerprints and their multiplicity, or an empty tally when absent.
-
-    A line this cannot read is an error, never an entry that is quietly dropped: a hand-edited
-    baseline that loses entries silently grandfathers nothing and reports every old violation.
-    """
-    if not path.exists():
-        return Counter()
-    entries: Counter = Counter()
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip() or line.startswith("#"):
-            continue
-        if line.count("\t") != 3:
-            raise BaselineError(f"baseline {path}:{lineno}: expected 'path<TAB>kind<TAB>digest<TAB>count'")
-        entry_path, kind, digest, count = line.split("\t")
-        if (
-            not entry_path
-            or "\0" in entry_path
-            or any(part in {".", ".."} for part in Path(entry_path).parts)
-            or kind not in BASELINE_KINDS
-            or re.fullmatch(r"[0-9a-f]{12}", digest) is None
-            or re.fullmatch(r"[1-9][0-9]*", count) is None
-        ):
-            raise BaselineError(f"baseline {path}:{lineno}: expected 'path<TAB>kind<TAB>digest<TAB>count'")
-        entries[f"{entry_path}\t{kind}\t{digest}"] += int(count)
-    return entries
-
-
-def write_baseline(path: Path, violations: list[Violation], scanned: set[str], scan: Scan) -> None:
-    """Rewrite the entries for the scanned files, keeping every entry outside that scope.
-
-    `--update-baseline src` must not delete the `tests/` entries it never looked at, which a
-    plain overwrite would do — a pre-commit entry scans one subtree at a time. An entry whose
-    file is gone or now excluded is dropped, since no later run can ever revisit it.
-    """
-    kept = Counter(
-        {
-            key: n
-            for key, n in read_baseline(path).items()
-            if key.split("\t", 1)[0] not in scanned and scan.still_scannable(key.split("\t", 1)[0])
-        }
-    )
-    kept.update(v.fingerprint for v in violations)
-    body = "\n".join(f"{key}\t{count}" for key, count in sorted(kept.items()))
-    path.write_text(body + "\n" if body else "", encoding="utf-8")
-
-
-def write_shrunk_baseline(path: Path, baseline: Counter, remaining: Counter, scanned: set[str], scan: Scan) -> None:
-    """Remove unmatched scanned entries, reduce matched counts, and keep live entries outside scope.
-
-    The result is a subset of `baseline`: this command only records a repair and cannot
-    grandfather a new violation.
-    """
-    kept = Counter()
-    for key, count in baseline.items():
-        entry_path = key.split("\t", 1)[0]
-        if entry_path in scanned and count > remaining[key]:
-            kept[key] = count - remaining[key]
-        elif entry_path not in scanned and scan.still_scannable(entry_path):
-            kept[key] = count
-    body = "\n".join(f"{key}\t{count}" for key, count in sorted(kept.items()))
-    path.write_text(body + "\n" if body else "", encoding="utf-8")
 
 
 def _print_unreadable(unreadable: Sequence[Violation]) -> None:
@@ -309,20 +229,7 @@ def report(new: list[Violation], unreadable: list[Violation], stale: Counter, ch
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check for inline comments and misplaced docstrings.")
     parser.add_argument("paths", nargs="*", default=[Path(".")], type=Path)
-    grandfathering = parser.add_mutually_exclusive_group(required=True)
-    grandfathering.add_argument("--baseline", type=Path, help="baseline file of grandfathered violations")
-    grandfathering.add_argument(
-        "--no-baseline", action="store_true", help="report every violation, grandfathering none"
-    )
-    baseline_actions = parser.add_mutually_exclusive_group()
-    baseline_actions.add_argument(
-        "--update-baseline", action="store_true", help="rewrite the baseline from current state"
-    )
-    baseline_actions.add_argument(
-        "--shrink-baseline",
-        action="store_true",
-        help="remove fixed violations from the baseline without adding current violations",
-    )
+    baseline.add_arguments(parser, required=True)
     parser.add_argument(
         "--project-root",
         type=Path,
@@ -331,8 +238,7 @@ def _parse_arguments() -> argparse.Namespace:
     )
     add_scope_arguments(parser)
     arguments = parser.parse_args()
-    if (arguments.update_baseline or arguments.shrink_baseline) and arguments.no_baseline:
-        parser.error("a baseline write needs --baseline, so it cannot be used with --no-baseline")
+    baseline.validate_arguments(parser, arguments)
     for path in arguments.paths:
         if not path.exists():
             parser.error(f"Path {path} does not exist")
@@ -344,7 +250,13 @@ def _judge(arguments: argparse.Namespace, scan: Scan, violations: list[Violation
     gradable = [v for v in violations if v.kind != UNPARSABLE]
 
     if arguments.update_baseline:
-        write_baseline(arguments.baseline, gradable, scanned, scan)
+        baseline.write(
+            arguments.baseline,
+            (violation.fingerprint for violation in gradable),
+            scanned,
+            baseline.Scope(scan.project_root, scan.skipped_directories),
+            BASELINE_KINDS,
+        )
         print(f"Baseline written: {len(gradable)} entries → {arguments.baseline} scope={len(scanned)}", file=sys.stderr)
         if not unreadable:
             return 0
@@ -354,23 +266,23 @@ def _judge(arguments: argparse.Namespace, scan: Scan, violations: list[Violation
     if arguments.no_baseline:
         return report(gradable, unreadable, Counter(), len(scanned), 0)
 
-    baseline = read_baseline(arguments.baseline)
-    remaining = baseline.copy()
-    new = []
-    for violation in gradable:
-        if remaining[violation.fingerprint] > 0:
-            remaining[violation.fingerprint] -= 1
-        else:
-            new.append(violation)
+    entries = baseline.read(arguments.baseline, BASELINE_KINDS)
+    new, remaining = baseline.classify(gradable, entries, lambda violation: violation.fingerprint)
 
     if arguments.shrink_baseline:
         if unreadable:
             return report(new, unreadable, Counter(), len(scanned), len(gradable) - len(new))
-        write_shrunk_baseline(arguments.baseline, baseline, remaining, scanned, scan)
+        baseline.shrink(
+            arguments.baseline,
+            entries,
+            remaining,
+            scanned,
+            baseline.Scope(scan.project_root, scan.skipped_directories),
+        )
         print(f"Baseline shrunk: {arguments.baseline}", file=sys.stderr)
         return report(new, unreadable, Counter(), len(scanned), len(gradable) - len(new))
 
-    stale = Counter({key: n for key, n in remaining.items() if n > 0 and key.split("\t", 1)[0] in scanned})
+    stale = baseline.stale(remaining, scanned)
     return report(new, unreadable, stale, len(scanned), len(gradable) - len(new))
 
 
@@ -394,7 +306,7 @@ def main() -> int:
 
     try:
         return _judge(arguments, scan, violations, scanned)
-    except BaselineError as exc:
+    except baseline.BaselineError as exc:
         print(f"❌ {exc}", file=sys.stderr)
         return 1
 

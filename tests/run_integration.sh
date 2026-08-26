@@ -54,10 +54,12 @@ mkdir -p "$CONSUMER"
 git -C "$CONSUMER" init -q
 git -C "$CONSUMER" config user.email test@example.com
 git -C "$CONSUMER" config user.name test
-printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-inline-comments\n        args: [--no-baseline, inline.py]\n      - id: dict-param-check\n        args: [dict.py]\n      - id: check-marker-budget\n      - id: check-dead-code\n        args: [--path, dead.py, --min-confidence, "80"]\n      - id: check-duplication\n' \
+printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-inline-comments\n        args: [--no-baseline, inline.py]\n      - id: dict-param-check\n        args: [--baseline, .quality/dict-params.txt, dict.py]\n      - id: check-marker-budget\n      - id: check-dead-code\n        args: [--path, dead.py, --min-confidence, "80"]\n      - id: check-duplication\n' \
     "$HOOK_REPOSITORY" "$(git -C "$HOOK_REPOSITORY" rev-parse HEAD)" > "$CONSUMER/.pre-commit-config.yaml"
+mkdir -p "$CONSUMER/.quality"
+printf 'dict.py\tdict-param\t76e94348139b\t1\n' > "$CONSUMER/.quality/dict-params.txt"
 printf 'VALUE = 1\n' > "$CONSUMER/inline.py"
-printf 'def public(value: int) -> int:\n    return value\n' > "$CONSUMER/dict.py"
+printf 'def public(value: dict) -> int:\n    return 1\n' > "$CONSUMER/dict.py"
 printf 'def used() -> int:\n    return 1\n\nused()\n' > "$CONSUMER/dead.py"
 printf '[project]\nname = "consumer"\nversion = "0.0.0"\nrequires-python = ">=3.11"\n\n[tool.vulture]\nexclude = ["dead.py"]\n' > "$CONSUMER/pyproject.toml"
 git -C "$CONSUMER" add -A
@@ -70,7 +72,7 @@ git -C "$CONSUMER" commit -qm clean
 
 echo '== packaged pre-commit hooks =='
 expect_pass "check-inline-comments allows clean source" check-inline-comments
-expect_pass "dict-param-check allows a typed signature" dict-param-check
+expect_pass "dict-param-check grandfathers an existing annotation" dict-param-check
 expect_pass "check-marker-budget allows no markers" check-marker-budget
 expect_pass "check-dead-code allows used code" check-dead-code
 expect_pass "check-duplication allows distinct source" check-duplication
@@ -79,9 +81,9 @@ printf 'VALUE = 1  # plain comment\n' > "$CONSUMER/inline.py"
 git -C "$CONSUMER" add inline.py
 expect_failure "check-inline-comments rejects a plain comment" check-inline-comments "Inline comment detected"
 
-printf 'def public(value: dict) -> int:\n    return 1\n' > "$CONSUMER/dict.py"
+printf 'def public(value: dict) -> int:\n    return 1\n\ndef added(value: dict) -> int:\n    return 1\n' > "$CONSUMER/dict.py"
 git -C "$CONSUMER" add dict.py
-expect_failure "dict-param-check rejects a dict parameter" dict-param-check "value: dict"
+expect_failure "dict-param-check rejects a new dict signature" dict-param-check "added(value: dict)"
 
 printf '# TODO: remove this marker\n' > "$CONSUMER/marker.py"
 git -C "$CONSUMER" add marker.py
