@@ -1,6 +1,6 @@
 # quality-gates
 
-Three code quality gates, run as pre-commit hooks. Every repository-specific value is a
+Four code quality gates, run as pre-commit hooks. Every repository-specific value is a
 command-line argument, so one copy serves many repositories.
 
 ## Use
@@ -15,6 +15,8 @@ command-line argument, so one copy serves many repositories.
       args: [src]
     - id: check-marker-budget
       args: [--ceiling, "20", --per-file, "big_module.py=15"]
+    - id: check-dead-code
+      args: [--path, src, --path, tests, --min-confidence, "80"]
     - id: check-duplication
       args: [--root, ., --format, "python,bash", --ext, '\.(py|sh)$', --min-lines, "5", --min-tokens, "50", --select, tree, --threshold, "0", --strict-scope]
 ```
@@ -88,6 +90,23 @@ The bundled Bash grammar has known heredoc parsing defects. A Bash file containi
 fails the marker budget rather than returning a result that could misread heredoc data as a
 comment.
 
+### check-dead-code
+
+Runs Vulture against the source paths you declare. `--path PATH` is required and repeatable.
+Each path must exist. The gate fails if the declared paths contain no Python files after Vulture
+exclusions, because an empty clean result has no value.
+
+`--min-confidence N` sets Vulture's report threshold and defaults to `80`. Use
+`--ignore-names PATTERNS` for Vulture's comma-separated name allowlist. Use `--exclude PATTERNS`
+for its comma-separated absolute-path exclusions. A bare pattern such as `generated` becomes
+`*generated*` and matches any absolute path that contains it. A glob pattern keeps its Vulture
+meaning. Directory paths include hidden Python files and directories, as Vulture does. The hook
+installs the exact `vulture==2.14.0` dependency in its isolated Python environment.
+
+The hook ignores `[tool.vulture]` settings in a consumer `pyproject.toml`. Configure its effective
+scope only with the hook arguments: `--path`, `--exclude`, `--ignore-names`, and
+`--min-confidence`. This prevents project configuration from changing an audited scope.
+
 ### check-duplication
 
 Runs `jscpd` against a declared source scope. The hook installs the exact `jscpd@5.0.16`
@@ -121,14 +140,16 @@ prose, so it is exempt from the comment rules and from every budget. No gate in 
 package consumes `# TYPE:`; it is recognised so a repository that uses it for its own
 tooling is not forced to choose between that tool and this one.
 
-Every gate skips `venv`, `.venv`, `node_modules`, `__pycache__` and `_generated` anywhere
-in a path. `_generated` is in that list because generated output is not written by hand,
-so a rule about how a human writes a comment cannot apply to it.
+`check-inline-comments`, `dict-param-check`, and `check-marker-budget` skip `venv`, `.venv`,
+`node_modules`, `__pycache__` and `_generated` anywhere in a path. `_generated` is in that list
+because generated output is not written by hand, so a rule about how a human writes a comment
+cannot apply to it. `check-dead-code` scans its declared `--path` scope, subject to Vulture
+`--exclude` patterns.
 
-`--skip-dir NAME` and `--src-dir NAME` ADD to those defaults and are repeatable. They can
-only widen a scan, never narrow it: a flag that replaced the defaults could silently drop
-a whole tree, and the gate would report a clean result it never earned. To scan less,
-name the path you want.
+`check-inline-comments` and `dict-param-check` support repeatable `--skip-dir NAME` and
+`--src-dir NAME`. They ADD to their defaults. They can only widen a scan, never narrow it: a
+flag that replaced the defaults could silently drop a whole tree, and the gate would report a
+clean result it never earned. To scan less, name the path you want.
 
 ## Behaviour every gate shares
 
@@ -136,9 +157,10 @@ name the path you want.
 - A file the gate cannot decode or parse is a VIOLATION, not a skip. It is reported with
   its path and the reason, and it can never be grandfathered by a baseline. Otherwise
   committing an unparsable file would hide its contents from the gate forever.
-- A directory argument narrows to `src` and `tests` only when it is a PROJECT ROOT, which
-  means it holds a `pyproject.toml`, a `setup.py` or a `setup.cfg`. Any other directory is
-  scanned whole. A project root is also scanned for `*.py` files sitting directly in it.
+- For `check-inline-comments` and `dict-param-check`, a directory argument narrows to `src` and
+  `tests` only when it is a PROJECT ROOT, which means it holds a `pyproject.toml`, a `setup.py`
+  or a `setup.cfg`. Any other directory is scanned whole. A project root also scans `*.py` files
+  sitting directly in it.
 - A clean run prints `scope=N`, the number of files read.
 - Exit code is 0 when clean and 1 on any breach.
 - `check-marker-budget` reads the files git tracks, so `--root` must be a git repository.

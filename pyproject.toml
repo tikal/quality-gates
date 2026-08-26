@@ -18,6 +18,7 @@ Issues = "https://github.com/tikal/quality-gates/issues"
 check-inline-comments = "quality_gates.inline_comments:main"
 dict-param-check = "quality_gates.dict_params:main"
 check-marker-budget = "quality_gates.marker_budget:main"
+check-dead-code = "quality_gates.dead_code:main"
 
 [build-system]
 requires = ["hatchling"]
