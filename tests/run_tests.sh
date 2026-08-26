@@ -27,6 +27,17 @@ expect_says() {
     fi
 }
 
+expect_scope() {
+    local label="$1" scope="$2"; shift 2
+    local out rc
+    out="$("$@" 2>&1)"; rc=$?
+    if [ "$rc" = 0 ] && [[ "$out" =~ (^|[[:space:]])scope="$scope"($|[[:space:]]) ]]; then
+        PASS=$((PASS + 1)); echo "  ok $label"
+    else
+        FAIL=$((FAIL + 1)); echo "  FAIL $label: expected success with scope=$scope"; echo "$out" | sed 's/^/      /'
+    fi
+}
+
 expect_unreadable_marker() {
     local label="$1" path="$2"
     expect "$label fails the marker budget" 1 check-marker-budget --ceiling 99
@@ -55,7 +66,8 @@ TOOLCHAIN="$(mktemp -d)"
 MARKER_SKIPS="$(mktemp -d)"
 DEAD_CODE_BIN="$(mktemp -d)"
 DEAD_CODE_SOURCE="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE"' EXIT
+CLEAN_HOOKS="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 expect "the Tree-sitter core support cap is declared" 0 python -c \
@@ -101,6 +113,29 @@ git init -q . && git config user.email t@t && git config user.name t
 
 printf '#!/bin/sh\nif [ -n "$VULTURE_OPTIONS" ]; then\n    if [ "$1" != "--config" ] || [ ! -f "$2" ]; then\n        exit 1\n    fi\n    shift 2\n    if [ "$*" != "$VULTURE_OPTIONS" ]; then\n        exit 1\n    fi\nfi\nfor argument in "$@"; do\n    case "$argument" in\n        *dead.py) printf "dead.py:1: unused function\\n"; exit 3 ;;\n    esac\ndone\nexit 0\n' > "$DEAD_CODE_BIN/vulture"
 chmod +x "$DEAD_CODE_BIN/vulture"
+
+echo "== exported hook scope =="
+printf 'VALUE = 1\n' > "$CLEAN_HOOKS/inline.py"
+printf 'def public(value: int) -> int:\n    return value\n' > "$CLEAN_HOOKS/dict.py"
+printf 'MARKER = 1\n' > "$CLEAN_HOOKS/marker.py"
+printf 'def used() -> int:\n    return 1\n\nused()\n' > "$CLEAN_HOOKS/dead.py"
+printf 'def live() -> int:\n    return 1\n\nlive()\n' > "$CLEAN_HOOKS/live.py"
+printf 'DUPLICATION = 1\n' > "$CLEAN_HOOKS/duplication.py"
+git -C "$CLEAN_HOOKS" init -q .
+git -C "$CLEAN_HOOKS" config user.email t@t
+git -C "$CLEAN_HOOKS" config user.name t
+git -C "$CLEAN_HOOKS" add -A && git -C "$CLEAN_HOOKS" commit -qm clean
+expect_scope "check-inline-comments reports its clean file scope" 1 \
+    check-inline-comments --no-baseline "$CLEAN_HOOKS/inline.py"
+expect_scope "dict-param-check reports its clean file scope" 1 dict-param-check "$CLEAN_HOOKS/dict.py"
+expect_scope "check-marker-budget reports its clean file scope" 6 \
+    check-marker-budget --root "$CLEAN_HOOKS" --ceiling 0
+expect_scope "check-dead-code reports its clean file scope" 1 env PATH="$DEAD_CODE_BIN:$PATH" \
+    check-dead-code --path "$CLEAN_HOOKS/live.py"
+expect_scope "check-duplication reports its clean file scope" 6 check-duplication --root "$CLEAN_HOOKS" \
+    --format python --ext '\.py$' --select tree --threshold 0 --strict-scope
+expect "a zero-file duplication scan fails" 1 check-duplication --root "$CLEAN_HOOKS" \
+    --format python --ext '\.js$' --select tree --threshold 0 --strict-scope
 
 echo "== dead code =="
 mkdir -p "$DEAD_CODE_SOURCE/empty" "$DEAD_CODE_SOURCE/generated" "$DEAD_CODE_SOURCE/mixed/generated" \
@@ -300,6 +335,10 @@ expect_says "the malformed --per-file names the format" "expected PATH=N" \
     check-marker-budget --ceiling 5 --per-file "pkg/a.py=²"
 
 echo "== inline comments =="
+mkdir -p update-scope
+printf 'VALUE = 1  # grandfather this\n' > update-scope/source.py
+expect_scope "a written baseline reports its scanned scope" 1 \
+    check-inline-comments --baseline update-scope.txt --update-baseline update-scope
 printf 'def f():\n    x = 1  # explain\n    return x\n' > pkg/b.py
 git add -A && git commit -qm b
 expect "a plain inline comment fails" 1 check-inline-comments --baseline missing.txt pkg

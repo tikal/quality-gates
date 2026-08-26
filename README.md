@@ -33,6 +33,12 @@ Each hook ships a working default `args:`, so `pre-commit try-repo` runs without
 The defaults are deliberately strict: the marker budget defaults to `--ceiling 0`, so a
 repository must state the number it wants.
 
+## Scope contract
+
+Every exported gate prints `scope=N` when it succeeds. `N` is the number of source files the
+gate read. A zero-file scan fails. A clean result without either condition does not show that the
+gate examined the intended source.
+
 ## The gates
 
 ### check-inline-comments
@@ -104,6 +110,10 @@ Runs Vulture against the source paths you declare. `--path PATH` is required and
 Each path must exist. The gate fails if the declared paths contain no Python files after Vulture
 exclusions, because an empty clean result has no value.
 
+On success, `scope=N` is the number of distinct Python files the wrapper selects from `--path`
+after it applies `--exclude`. The wrapper reads and parses each selected file before it invokes
+Vulture. This is the wrapper's verified input scope, not a source count that Vulture reports.
+
 `--min-confidence N` sets Vulture's report threshold and defaults to `80`. Use
 `--ignore-names PATTERNS` for Vulture's comma-separated name allowlist. Use `--exclude PATTERNS`
 for its comma-separated absolute-path exclusions. A bare pattern such as `generated` becomes
@@ -161,7 +171,7 @@ clean result it never earned. To scan less, name the path you want.
 
 ## Behaviour every gate shares
 
-- A scan that reads zero files FAILS. A gate that cannot fail is not a gate.
+- A scan that reads zero files fails. A gate that cannot fail is not a gate.
 - A file the gate cannot decode or parse is a VIOLATION, not a skip. It is reported with
   its path and the reason, and it can never be grandfathered by a baseline. Otherwise
   committing an unparsable file would hide its contents from the gate forever.
@@ -169,7 +179,8 @@ clean result it never earned. To scan less, name the path you want.
   `tests` only when it is a PROJECT ROOT, which means it holds a `pyproject.toml`, a `setup.py`
   or a `setup.cfg`. Any other directory is scanned whole. A project root also scans `*.py` files
   sitting directly in it.
-- A clean run prints `scope=N`, the number of files read.
+- A clean run prints `scope=N`, the number of files read. `check-dead-code` reports its
+  wrapper-verified Python scope, as defined above.
 - Exit code is 0 when clean and 1 on any breach.
 - `check-marker-budget` reads the files git tracks, so `--root` must be a git repository.
 
