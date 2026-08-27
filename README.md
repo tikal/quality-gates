@@ -1,6 +1,6 @@
 # quality-gates
 
-Seven code quality gates, run as pre-commit hooks. Every repository-specific value is a
+Ten code quality gates, run as pre-commit hooks. Every repository-specific value is a
 command-line argument, so one copy serves many repositories.
 
 ## Use
@@ -34,16 +34,18 @@ commit. `pre-commit autoupdate` can replace the commit pin with a tag. Review it
 restore the intended commit pin before you commit the update.
 
 Each standard hook ships a working default `args:`, so `pre-commit try-repo` runs without
-configuration. `check-forbidden-mocks` and `check-pytest-describe` are opt-in. The mock gate
+configuration. `check-forbidden-mocks`, `check-pytest-describe`, `check-hook-scope-contract`,
+`check-manifest-audit-coverage`, and `check-dockerfile-enrollment` are opt-in. The mock gate
 requires a consumer to set `--factory-location PATH`; configure the pytest-describe gate with
-its intended test roots. The defaults are deliberately strict: the marker budget defaults to
+its intended test roots and each enrollment gate with its consumer policy inputs. The defaults are deliberately strict: the marker budget defaults to
 `--ceiling 0`, so a repository must state the number it wants.
 
 ## Scope contract
 
-Every exported gate prints `scope=N` when it succeeds. `N` is the number of source files the
-gate read. A zero-file scan fails. A clean result without either condition does not show that the
-gate examined the intended source.
+Every exported gate prints `scope=N` when it succeeds. `N` is the number of audited units; source
+gates count files, while meta-gates count their declared configuration units. A zero-source-file
+scan fails. A clean result without either condition does not show that the gate examined its
+intended scope.
 
 ## The gates
 
@@ -177,6 +179,59 @@ The gate enforces this opinionated `pytest-describe` grammar:
 The gate only recognizes direct function children of a module or hierarchy block. It does not
 classify methods on ordinary classes or nested helper functions outside the declared hierarchy.
 Configure `pytest-describe` collection prefixes to match this grammar in each consumer project.
+
+### check-hook-scope-contract
+
+This opt-in meta-gate audits a consumer `.pre-commit-config.yaml`. Every declared hook must be
+listed exactly once as a `--scope-emitter ID=PATH` or an `--exempt ID=REASON`. An emitter is a
+repository-owned source file that contains a dynamic `scope=` output. The auditor fails on
+unclassified hooks, stale declarations, unreadable emitters, or a guard that is not itself a
+reporting emitter. A clean run reports the number of classified hooks as `scope=N`.
+
+```yaml
+- id: check-hook-scope-contract
+  args:
+    - --hook-id=check-hook-scope-contract
+    - --scope-emitter=check-hook-scope-contract=scripts/hook_scope.py
+    - --scope-emitter=check-marker-budget=scripts/marker_budget.py
+    - --exempt=ruff=Upstream hook owns changed-file selection.
+```
+
+The configured hook `entry:` must name each mapped emitter. The gate statically verifies wiring;
+each emitter still needs its own runtime test proving its clean path prints an accurate scope.
+
+### check-manifest-audit-coverage
+
+This opt-in meta-gate verifies dependency-audit enrollment, not vulnerability findings. Declare
+each dependency manifest basename with `--manifest` and select audit hooks by
+`--audit-hook-prefix`. Every tracked matching manifest must match a selected hook's `files:`
+regular expression or have an exact, rationale-backed exemption in an optional TSV file.
+Exemptions become stale when their manifest disappears or becomes covered. A configured gate
+with no declared manifests fails rather than reporting a meaningless clean result.
+
+```yaml
+- id: check-manifest-audit-coverage
+  args: [--manifest, pyproject.toml, --manifest, package.json, --audit-hook-prefix, dependency-audit-, --exemptions, .quality/manifest-exemptions.tsv]
+```
+
+Each exemption is `root/relative/manifest<TAB>reviewed rationale`. The exemption file must be
+tracked, and a stale exemption fails.
+
+### check-dockerfile-enrollment
+
+This opt-in gate requires a tracked JSON ledger (`--ledger PATH`) to classify every tracked
+`Dockerfile*` as `pull`, `build`, or `ignore`. Ignore entries need a rationale, and stale ledger
+entries fail. It reads every selected Dockerfile and reports `scope=N`; zero Dockerfiles fail.
+The gate verifies scan enrollment only. It does not run Docker, build images, or scan CVEs.
+
+```yaml
+- id: check-dockerfile-enrollment
+  args: [--ledger, .quality/dockerfile-enrollment.json]
+```
+
+```json
+{"version": 1, "dockerfiles": [{"path": "services/api/Dockerfile", "classification": "build"}, {"path": "examples/legacy/Dockerfile", "classification": "ignore", "rationale": "Documentation-only example."}]}
+```
 
 ### check-duplication
 

@@ -56,6 +56,33 @@
   pass_filenames: false
   require_serial: true
 
+- id: check-hook-scope-contract
+  name: check pre-commit hook scope contract
+  description: Opt in to require every configured hook to report scope=N or carry a reviewed exemption.
+  entry: check-hook-scope-contract
+  language: python
+  always_run: true
+  pass_filenames: false
+  require_serial: true
+
+- id: check-manifest-audit-coverage
+  name: check dependency manifest audit coverage
+  description: Opt in to require every declared dependency manifest to match an audit hook or reviewed exemption.
+  entry: check-manifest-audit-coverage
+  language: python
+  always_run: true
+  pass_filenames: false
+  require_serial: true
+
+- id: check-dockerfile-enrollment
+  name: check Dockerfile scan enrollment
+  description: Opt in to require every tracked Dockerfile to have a reviewed pull, build, or ignore classification.
+  entry: check-dockerfile-enrollment
+  language: python
+  always_run: true
+  pass_filenames: false
+  require_serial: true
+
 - id: check-duplication
   name: check copy-paste duplication
   description: Fail when jscpd finds a clone or reads less than the declared strict scope.
