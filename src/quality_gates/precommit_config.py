@@ -4,21 +4,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
+UNVERIFIABLE_FILTERS = frozenset(("exclude", "types", "types_or", "exclude_types", "stages"))
+
 
 class ConfigError(Exception):
     """A pre-commit configuration cannot be safely inventoried."""
 
 
-def hooks_from(path: Path) -> list[tuple[str, str | None, str | None]]:  # noqa: C901
-    """Return configured hook IDs, optional files patterns, and entries."""
+def hooks_from(path: Path) -> list[tuple[str, str | None, str | None, frozenset[str]]]:  # noqa: C901
+    """Return configured hook IDs, optional files patterns, entries, and filters."""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError) as exc:
         raise ConfigError(f"cannot read {path}: {exc}") from exc
-    hooks: list[tuple[str, str | None, str | None]] = []
+    hooks: list[tuple[str, str | None, str | None, frozenset[str]]] = []
     current: str | None = None
     files: str | None = None
     entry: str | None = None
+    filters: set[str] = set()
     for number, raw in enumerate(lines, 1):
         line = _without_comment(raw).rstrip()
         stripped = line.strip()
@@ -26,19 +29,22 @@ def hooks_from(path: Path) -> list[tuple[str, str | None, str | None]]:  # noqa:
             continue
         if stripped.startswith("- id:"):
             if current is not None:
-                hooks.append((current, files, entry))
+                hooks.append((current, files, entry, frozenset(filters)))
             current = _scalar(stripped.removeprefix("- id:"), path, number)
             files = None
             entry = None
+            filters = set()
         elif current is not None and stripped.startswith("files:"):
             files = _scalar(stripped.removeprefix("files:"), path, number)
         elif current is not None and stripped.startswith("entry:"):
             entry = _scalar(stripped.removeprefix("entry:"), path, number)
+        elif current is not None and (name := stripped.split(":", 1)[0]) in UNVERIFIABLE_FILTERS:
+            filters.add(name)
     if current is not None:
-        hooks.append((current, files, entry))
+        hooks.append((current, files, entry, frozenset(filters)))
     if not hooks:
         raise ConfigError(f"{path}: no hook declarations found")
-    if len({hook_id for hook_id, _, _ in hooks}) != len(hooks):
+    if len({hook_id for hook_id, _, _, _ in hooks}) != len(hooks):
         raise ConfigError(f"{path}: duplicate hook id")
     return hooks
 

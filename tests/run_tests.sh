@@ -482,6 +482,9 @@ expect_scope "a tracked manifest exemption is live" 2 check-manifest-audit-cover
 printf 'repos:\n  - repo: local\n    hooks:\n      - id: ruff\n        entry: ruff\n' > "$ENROLLMENT/no-audit-hooks.yaml"
 expect "an empty audit hook derivation fails" 1 check-manifest-audit-coverage --root "$ENROLLMENT" \
     --pre-commit-config no-audit-hooks.yaml --manifest missing.toml --audit-hook-prefix dependency-audit-
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: dependency-audit-python\n        entry: audit\n        files: ^pyproject\\.toml$\n        exclude: ^pyproject\\.toml$\n' > "$ENROLLMENT/filtered-audit-hooks.yaml"
+expect "an unverifiable audit hook filter fails" 1 check-manifest-audit-coverage --root "$ENROLLMENT" \
+    --pre-commit-config filtered-audit-hooks.yaml --manifest pyproject.toml --audit-hook-prefix dependency-audit-
 expect "a zero manifest scan fails" 1 check-manifest-audit-coverage --root "$ENROLLMENT" \
     --pre-commit-config audit-hooks.yaml --manifest missing.toml --audit-hook-prefix dependency-audit-
 printf 'FROM scratch\n' > "$ENROLLMENT/Dockerfile"

@@ -55,11 +55,14 @@ def _audit_patterns(config: Path, prefix: str) -> tuple[list[re.Pattern[str]], l
 
     patterns = []
     failures = []
-    for hook_id, files, _ in hooks:
+    for hook_id, files, _, filters in hooks:
         if not hook_id.startswith(prefix):
             continue
         if files is None:
             failures.append(f"{hook_id}: audit hook is missing a files regex")
+            continue
+        if filters:
+            failures.append(f"{hook_id}: audit hook uses unverifiable filters: {', '.join(sorted(filters))}")
             continue
         try:
             patterns.append(re.compile(files))

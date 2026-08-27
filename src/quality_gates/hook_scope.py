@@ -44,8 +44,8 @@ def main() -> int:
     except ConfigError as exc:
         print(f"hook scope contract failed: {exc}", file=sys.stderr)
         return 1
-    configured = {hook_id for hook_id, _, _ in hooks}
-    entries = {hook_id: entry for hook_id, _, entry in hooks}
+    configured = {hook_id for hook_id, _, _, _ in hooks}
+    entries = {hook_id: entry for hook_id, _, entry, _ in hooks}
     findings = [f"UNREGISTERED: {hook_id}" for hook_id in sorted(configured - emitters.keys() - exemptions.keys())]
     findings.extend(f"stale scope-emitter: {hook_id}" for hook_id in sorted(emitters.keys() - configured))
     findings.extend(f"stale exemption: {hook_id}" for hook_id in sorted(exemptions.keys() - configured))
