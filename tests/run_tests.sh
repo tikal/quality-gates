@@ -73,7 +73,9 @@ MARKER_SKIPS="$(mktemp -d)"
 DEAD_CODE_BIN="$(mktemp -d)"
 DEAD_CODE_SOURCE="$(mktemp -d)"
 CLEAN_HOOKS="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS"' EXIT
+MOCKS="$(mktemp -d)"
+PYTEST_DESCRIBE="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 expect "the Tree-sitter core support cap is declared" 0 python -c \
@@ -445,6 +447,111 @@ echo "== scope =="
 mkdir -p empty
 expect "an empty scan fails the comment gate" 1 check-inline-comments --no-baseline empty
 expect "an empty scan fails the dict gate" 1 dict-param-check empty
+
+echo "== forbidden mocks =="
+printf 'VALUE = 1\n' > "$MOCKS/clean.py"
+expect_scope "a clean mock scan reports its file scope" 1 \
+    check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/clean.py"
+expect "a mock scan requires its factory location" 2 check-forbidden-mocks "$MOCKS/clean.py"
+expect "a zero-file mock scan fails" 1 check-forbidden-mocks --factory-location tests/factories.py empty
+printf 'from unittest.mock import AsyncMock, MagicMock, Mock, patch\n\n@patch("service")\ndef test_service(monkeypatch):\n    first = Mock()\n    second = MagicMock()\n    third = AsyncMock()\n    patch("service")\n' > "$MOCKS/bad.py"
+expect "forbidden mock use fails" 1 check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/bad.py"
+expect_says "a mock constructor is reported" "Mock(...)" \
+    check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/bad.py"
+expect_says "a magic mock constructor is reported" "MagicMock(...)" \
+    check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/bad.py"
+expect_says "an async mock constructor is reported" "AsyncMock(...)" \
+    check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/bad.py"
+expect_says "a patch decorator is reported" "patch decorator" \
+    check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/bad.py"
+expect_says "a patch call is reported" "patch(...)" \
+    check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/bad.py"
+expect_says "a monkeypatch parameter is reported" "monkeypatch parameter" \
+    check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/bad.py"
+expect_says "the remediation names the configured factory location" "tests/factories.py" \
+    check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/bad.py"
+printf 'from unittest.mock import Mock as M, patch as replace\n\nvalue = M()\nreplace("service")\n' > "$MOCKS/aliased.py"
+expect "aliased mock imports fail" 1 check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/aliased.py"
+printf 'from unittest.mock import patch as replace\n\nreplace.object(object(), "value")\n' > "$MOCKS/aliased_patch_api.py"
+expect "aliased patch helper APIs fail" 1 check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/aliased_patch_api.py"
+printf 'from unittest.mock import patch\n\npatch.object(object(), "value")\n' > "$MOCKS/patch_api.py"
+expect "patch helper APIs fail" 1 check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/patch_api.py"
+printf 'from unittest import mock\n\nmock.patch("service")\nmock.patch.object(object(), "value")\n' > "$MOCKS/module_patch.py"
+expect "unittest.mock module patch APIs fail" 1 \
+    check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/module_patch.py"
+printf 'def broken(:\n' > "$MOCKS/unreadable.py"
+expect "an unparsable mock source fails" 1 check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/unreadable.py"
+
+echo "== pytest describe =="
+printf 'def describe_widget():\n    def given_an_authenticated_user():\n        def when_enabled():\n            def test_returns_the_widget():\n                assert True\n\n        def with_saved_preferences():\n            def test_uses_preferences():\n                assert True\n\n        def without_saved_preferences():\n            def test_uses_defaults():\n                assert True\n\n        def and_feature_flag_is_set():\n            def test_exposes_the_feature():\n                assert True\n\n    def for_anonymous_user():\n        def test_requires_authentication():\n            assert True\n' > "$PYTEST_DESCRIBE/test_clean.py"
+expect_scope "a clean pytest-describe scan reports its test-file scope" 1 check-pytest-describe "$PYTEST_DESCRIBE"
+expect_scope "a repeated pytest-describe path is read once" 1 \
+    check-pytest-describe "$PYTEST_DESCRIBE/test_clean.py" "$PYTEST_DESCRIBE/test_clean.py"
+mkdir "$PYTEST_DESCRIBE/empty"
+expect "a zero-file pytest-describe scan fails" 1 check-pytest-describe "$PYTEST_DESCRIBE/empty"
+expect "a missing pytest-describe path fails" 2 check-pytest-describe "$PYTEST_DESCRIBE/missing"
+printf '{}' > "$PYTEST_DESCRIBE/test_data.json"
+expect "a non-Python test-shaped file is out of pytest-describe scope" 1 check-pytest-describe "$PYTEST_DESCRIBE/test_data.json"
+
+printf 'def test_at_module_level():\n    assert True\n' > "$PYTEST_DESCRIBE/test_top_level.py"
+expect_says "a top-level test is rejected" "top-level test" check-pytest-describe "$PYTEST_DESCRIBE/test_top_level.py"
+
+for prefix in when with without and; do
+    printf 'def %s_a_request_arrives():\n    def test_is_rejected():\n        assert True\n' "$prefix" \
+        > "$PYTEST_DESCRIBE/test_top_level_$prefix.py"
+    expect_says "a top-level $prefix scenario is rejected" "must be inside a describe" \
+        check-pytest-describe "$PYTEST_DESCRIBE/test_top_level_$prefix.py"
+done
+
+for prefix in given for; do
+    printf 'def %s_an_authenticated_user():\n    def test_can_continue():\n        assert True\n' "$prefix" \
+        > "$PYTEST_DESCRIBE/test_top_level_$prefix.py"
+    expect_says "a top-level $prefix precondition is rejected" "must be inside a describe" \
+        check-pytest-describe "$PYTEST_DESCRIBE/test_top_level_$prefix.py"
+done
+
+printf 'def describe_empty():\n    pass\n' > "$PYTEST_DESCRIBE/test_empty_describe.py"
+expect_says "an empty describe block is rejected" "describe_empty is empty" \
+    check-pytest-describe "$PYTEST_DESCRIBE/test_empty_describe.py"
+printf 'def describe_mixed():\n    def test_direct():\n        assert True\n\n    def when_configured():\n        def test_nested():\n            assert True\n' > "$PYTEST_DESCRIBE/test_mixed.py"
+expect_says "a describe block cannot mix direct tests and scenarios" "contains both scenario" \
+    check-pytest-describe "$PYTEST_DESCRIBE/test_mixed.py"
+
+for prefix in given for; do
+    printf 'def describe_widget():\n    def %s_a_user():\n        pass\n' "$prefix" > "$PYTEST_DESCRIBE/test_empty_$prefix.py"
+    expect_says "an empty $prefix precondition is rejected" "has no test_*" \
+        check-pytest-describe "$PYTEST_DESCRIBE/test_empty_$prefix.py"
+    printf 'def describe_widget():\n    def %s_a_user():\n        def describe_nested():\n            def test_it_works():\n                assert True\n' "$prefix" > "$PYTEST_DESCRIBE/test_nested_describe_$prefix.py"
+    expect_says "$prefix cannot contain a describe block" "inside precondition" \
+        check-pytest-describe "$PYTEST_DESCRIBE/test_nested_describe_$prefix.py"
+done
+
+for prefix in when with without and; do
+    printf 'def describe_widget():\n    def %s_configured():\n        pass\n' "$prefix" > "$PYTEST_DESCRIBE/test_empty_$prefix.py"
+    expect_says "an empty $prefix scenario is rejected" "has no test_*" \
+        check-pytest-describe "$PYTEST_DESCRIBE/test_empty_$prefix.py"
+    printf 'def describe_widget():\n    def %s_configured():\n        def describe_nested():\n            def test_it_works():\n                assert True\n' "$prefix" > "$PYTEST_DESCRIBE/test_nested_describe_$prefix.py"
+    expect_says "$prefix cannot contain a describe block" "inside scenario" \
+        check-pytest-describe "$PYTEST_DESCRIBE/test_nested_describe_$prefix.py"
+done
+
+printf 'def describe_widget():\n    def test_the_default_case():\n        def and_a_child_is_nested():\n            assert True\n' > "$PYTEST_DESCRIBE/test_non_leaf.py"
+expect_says "a test function must be a leaf" "contains nested function and_a_child_is_nested" \
+    check-pytest-describe "$PYTEST_DESCRIBE/test_non_leaf.py"
+
+for prefix in when with without and; do
+    printf 'def describe_widget_%s_disabled():\n    def test_widget_%s_disabled():\n        assert True\n' "$prefix" "$prefix" > "$PYTEST_DESCRIBE/test_embedded_$prefix.py"
+    expect_says "an embedded $prefix condition is rejected" "embeds '_${prefix}_'" \
+        check-pytest-describe "$PYTEST_DESCRIBE/test_embedded_$prefix.py"
+done
+
+printf 'def describe_broken(:\n' > "$PYTEST_DESCRIBE/test_broken.py"
+expect "an unparsable pytest-describe source exits nonzero" 1 check-pytest-describe "$PYTEST_DESCRIBE/test_broken.py"
+expect_says "an unparsable pytest-describe source fails" "test_broken.py" check-pytest-describe "$PYTEST_DESCRIBE/test_broken.py"
+printf '\377\376\372' > "$PYTEST_DESCRIBE/test_invalid_utf8.py"
+expect "an undecodable pytest-describe source exits nonzero" 1 check-pytest-describe "$PYTEST_DESCRIBE/test_invalid_utf8.py"
+expect_says "an undecodable pytest-describe source fails" "test_invalid_utf8.py" \
+    check-pytest-describe "$PYTEST_DESCRIBE/test_invalid_utf8.py"
 
 mkdir -p lib/tests
 printf 'x = 1  # a bad comment beside a tests directory\n' > lib/bad.py

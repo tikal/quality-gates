@@ -38,6 +38,24 @@
   pass_filenames: false
   require_serial: true
 
+- id: check-forbidden-mocks
+  name: check forbidden test mocks
+  description: Opt in to forbid Mock, patch, and monkeypatch. Set --factory-location to name the approved test-double factory.
+  entry: check-forbidden-mocks
+  language: python
+  types: [python]
+  pass_filenames: false
+  require_serial: true
+
+- id: check-pytest-describe
+  name: check pytest-describe test hierarchy
+  description: Opt in to require describe, scenario, precondition, and leaf-test nesting for pytest-describe tests.
+  entry: check-pytest-describe
+  language: python
+  types: [python]
+  pass_filenames: false
+  require_serial: true
+
 - id: check-duplication
   name: check copy-paste duplication
   description: Fail when jscpd finds a clone or reads less than the declared strict scope.
