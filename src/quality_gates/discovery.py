@@ -63,7 +63,7 @@ def tracked_files(root: Path) -> list[Path]:
     if listing.returncode != 0:
         detail = listing.stderr.strip() or f"git ls-files exited {listing.returncode}"
         raise RuntimeError(f"cannot list tracked files under {root}: {detail}")
-    return [path for rel in listing.stdout.split("\0") if rel and (path := root / rel).exists()]
+    return [path for rel in listing.stdout.split("\0") if rel and ((path := root / rel).exists() or path.is_symlink())]
 
 
 def is_project_root(path: Path) -> bool:

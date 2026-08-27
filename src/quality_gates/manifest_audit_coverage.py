@@ -86,7 +86,7 @@ def main() -> int:
         for path in selected:
             path.read_bytes()
         manifests = {path.relative_to(root).as_posix() for path in selected}
-    except (RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         print(f"manifest audit coverage failed: {exc}", file=sys.stderr)
         return 1
 

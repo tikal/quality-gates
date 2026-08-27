@@ -64,7 +64,7 @@ printf 'def used() -> int:\n    return 1\n\nused()\n' > "$CONSUMER/dead.py"
 printf 'VALUE = 1\n' > "$CONSUMER/mocks.py"
 printf 'def describe_shape():\n    def test_is_valid():\n        assert True\n' > "$CONSUMER/test_shape.py"
 printf '[project]\nname = "consumer"\nversion = "0.0.0"\nrequires-python = ">=3.11"\n\n[tool.vulture]\nexclude = ["dead.py"]\n' > "$CONSUMER/pyproject.toml"
-printf 'repos:\n  - repo: local\n    hooks:\n      - id: check-hook-scope-contract\n        entry: check-hook-scope-contract hooks/scope-emitter.py\n' > "$CONSUMER/scope-contract.yaml"
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: check-hook-scope-contract\n        entry: python hooks/scope-emitter.py\n' > "$CONSUMER/scope-contract.yaml"
 printf 'print(f"scope={1}")\n' > "$CONSUMER/hooks/scope-emitter.py"
 printf 'repos:\n  - repo: local\n    hooks:\n      - id: dependency-audit-python\n        files: ^pyproject\\.toml$\n' > "$CONSUMER/audit-hooks.yaml"
 printf 'FROM scratch\n' > "$CONSUMER/Dockerfile"
@@ -114,7 +114,7 @@ printf 'def test_at_module_level():\n    assert True\n' > "$CONSUMER/test_shape.
 git -C "$CONSUMER" add test_shape.py
 expect_failure "check-pytest-describe rejects a top-level test" check-pytest-describe "top-level test"
 
-printf 'repos:\n  - repo: local\n    hooks:\n      - id: check-hook-scope-contract\n        entry: check-hook-scope-contract hooks/scope-emitter.py\n      - id: unclassified-hook\n        entry: python unclassified.py\n' > "$CONSUMER/scope-contract.yaml"
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: check-hook-scope-contract\n        entry: python hooks/scope-emitter.py\n      - id: unclassified-hook\n        entry: python unclassified.py\n' > "$CONSUMER/scope-contract.yaml"
 git -C "$CONSUMER" add scope-contract.yaml
 expect_failure "check-hook-scope-contract rejects an unclassified hook" check-hook-scope-contract "UNREGISTERED: unclassified-hook"
 
