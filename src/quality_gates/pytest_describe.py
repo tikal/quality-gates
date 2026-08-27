@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
-from quality_gates.discovery import SKIPPED_DIRECTORIES, is_in_skipped_directory
 from quality_gates.source import UnreadableSource, analyze_sources, unique_paths
 
 SCENARIO_PREFIXES = ("when_", "with_", "without_", "and_")
@@ -125,11 +124,7 @@ class DescribeAnalyzer:
 def _test_files_under(path: Path) -> list[Path]:
     if path.is_file():
         return [path] if path.suffix == ".py" and (path.name == "conftest.py" or path.name.startswith("test_")) else []
-    return [
-        candidate
-        for candidate in sorted([*path.rglob("test_*.py"), *path.rglob("conftest.py")])
-        if not is_in_skipped_directory(candidate, SKIPPED_DIRECTORIES)
-    ]
+    return sorted([*path.rglob("test_*.py"), *path.rglob("conftest.py")])
 
 
 def _analyze_tree(anchor: str, tree: ast.Module) -> list[Finding]:

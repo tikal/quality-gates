@@ -165,6 +165,7 @@ The gate enforces this opinionated `pytest-describe` grammar:
   fixtures are outside this grammar.
 - A `describe_*` block may contain nested descriptions, preconditions, scenarios, or direct
   tests. It cannot mix direct tests and scenarios at the same level.
+- Every hierarchy block must contain at least one recognized child.
 - `given_*` and `for_*` are preconditions. They may contain scenarios or direct tests, but not
   descriptions or another precondition.
 - `when_*`, `with_*`, `without_*`, and `and_*` are scenarios. They may contain preconditions,

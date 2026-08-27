@@ -115,7 +115,7 @@ class MockAnalyzer(ast.NodeVisitor):
         return (
             len(parts) > 1
             and ((parts[0] in self.patch_names) or module_patch)
-            and (parts[0] in self.patch_names or "patch" in parts)
+            and (parts[0] in self.patch_names or module_patch and "patch" in parts)
         )
 
 

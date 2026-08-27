@@ -472,6 +472,8 @@ expect_says "the remediation names the configured factory location" "tests/facto
     check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/bad.py"
 printf 'from unittest.mock import Mock as M, patch as replace\n\nvalue = M()\nreplace("service")\n' > "$MOCKS/aliased.py"
 expect "aliased mock imports fail" 1 check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/aliased.py"
+printf 'from unittest.mock import patch as replace\n\nreplace.object(object(), "value")\n' > "$MOCKS/aliased_patch_api.py"
+expect "aliased patch helper APIs fail" 1 check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/aliased_patch_api.py"
 printf 'from unittest.mock import patch\n\npatch.object(object(), "value")\n' > "$MOCKS/patch_api.py"
 expect "patch helper APIs fail" 1 check-forbidden-mocks --factory-location tests/factories.py "$MOCKS/patch_api.py"
 printf 'from unittest import mock\n\nmock.patch("service")\nmock.patch.object(object(), "value")\n' > "$MOCKS/module_patch.py"
