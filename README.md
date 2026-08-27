@@ -1,6 +1,6 @@
 # quality-gates
 
-Four code quality gates, run as pre-commit hooks. Every repository-specific value is a
+Seven code quality gates, run as pre-commit hooks. Every repository-specific value is a
 command-line argument, so one copy serves many repositories.
 
 ## Use
@@ -17,6 +17,10 @@ command-line argument, so one copy serves many repositories.
       args: [--ceiling, "20", --per-file, "big_module.py=15"]
     - id: check-dead-code
       args: [--path, src, --path, tests, --min-confidence, "80"]
+    - id: check-forbidden-mocks
+      args: [--factory-location, tests/factories.py, tests]
+    - id: check-pytest-describe
+      args: [tests]
     - id: check-duplication
       args: [--root, ., --format, "python,bash", --ext, '\.(py|sh)$', --min-lines, "5", --min-tokens, "50", --select, tree, --threshold, "0", --strict-scope]
 ```
@@ -29,9 +33,11 @@ the commit. In a checkout, peel the tag with `git rev-list -n 1 v0.1.0` and pin 
 commit. `pre-commit autoupdate` can replace the commit pin with a tag. Review its changes and
 restore the intended commit pin before you commit the update.
 
-Each hook ships a working default `args:`, so `pre-commit try-repo` runs without configuration.
-The defaults are deliberately strict: the marker budget defaults to `--ceiling 0`, so a
-repository must state the number it wants.
+Each standard hook ships a working default `args:`, so `pre-commit try-repo` runs without
+configuration. `check-forbidden-mocks` and `check-pytest-describe` are opt-in. The mock gate
+requires a consumer to set `--factory-location PATH`; configure the pytest-describe gate with
+its intended test roots. The defaults are deliberately strict: the marker budget defaults to
+`--ceiling 0`, so a repository must state the number it wants.
 
 ## Scope contract
 
@@ -134,6 +140,42 @@ installs the exact `vulture==2.14.0` dependency in its isolated Python environme
 The hook ignores `[tool.vulture]` settings in a consumer `pyproject.toml`. Configure its effective
 scope only with the hook arguments: `--path`, `--exclude`, `--ignore-names`, and
 `--min-confidence`. This prevents project configuration from changing an audited scope.
+
+### check-forbidden-mocks
+
+This gate is opt-in. Add the hook to a consumer configuration and set
+`--factory-location PATH`. The location is required. It appears in each failure as the place
+where that repository keeps its approved test doubles. The package does not assume a `conftest`
+path or create a default location.
+
+The gate rejects calls to `Mock`, `MagicMock`, `AsyncMock`, and `patch`. It also rejects a
+`patch` decorator and a `monkeypatch` function parameter. It reports every independent finding
+in a file, so one repair does not expose a hidden mock violation.
+
+### check-pytest-describe
+
+This gate is opt-in. It validates `test_*.py` and `conftest.py` below the paths it receives;
+pass the test roots explicitly, such as `args: [tests]`. A directory with no matching test files
+fails, as does a test file that cannot be decoded or parsed. A clean run prints `scope=N` for
+the test files it read.
+
+The gate enforces this opinionated `pytest-describe` grammar:
+
+- Only `describe_*` hierarchy blocks may appear at module level. Ordinary module helpers and
+  fixtures are outside this grammar.
+- A `describe_*` block may contain nested descriptions, preconditions, scenarios, or direct
+  tests. It cannot mix direct tests and scenarios at the same level.
+- `given_*` and `for_*` are preconditions. They may contain scenarios or direct tests, but not
+  descriptions or another precondition.
+- `when_*`, `with_*`, `without_*`, and `and_*` are scenarios. They may contain preconditions,
+  nested scenarios, or direct tests, but not descriptions.
+- `test_*` and `it_*` are leaves. They cannot contain a nested hierarchy block.
+- A hierarchy block cannot embed `_when_`, `_with_`, `_without_`, `_and_`, `_given_`, or `_for_`
+  in its name. Express that condition with a nested block instead.
+
+The gate only recognizes direct function children of a module or hierarchy block. It does not
+classify methods on ordinary classes or nested helper functions outside the declared hierarchy.
+Configure `pytest-describe` collection prefixes to match this grammar in each consumer project.
 
 ### check-duplication
 

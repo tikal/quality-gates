@@ -11,11 +11,14 @@ from __future__ import annotations
 import ast
 import io
 import tokenize
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
+from typing import TypeVar
 
 UNPARSABLE = "unparsable"
 
 READ_FAILURES = (SyntaxError, UnicodeDecodeError, ValueError, LookupError, OSError)
+T = TypeVar("T")
 
 
 class UnreadableSource(Exception):
@@ -42,6 +45,53 @@ def parse_source(source: str) -> ast.Module:
         return ast.parse(source)
     except READ_FAILURES as exc:
         raise _unreadable(exc) from exc
+
+
+def parsed_sources(paths: Iterable[Path], project_root: Path) -> Iterator[tuple[str, ast.Module | UnreadableSource]]:
+    """Yield every source's stable name and parsed tree, preserving read failures."""
+    for path in unique_paths(paths):
+        absolute = path.absolute()
+        try:
+            resolved = path.resolve()
+            try:
+                anchor = resolved.relative_to(project_root).as_posix()
+            except ValueError:
+                anchor = resolved.as_posix()
+        except (OSError, RuntimeError) as exc:
+            yield absolute.as_posix(), UnreadableSource(1, f"{type(exc).__name__}: {exc}")
+            continue
+        try:
+            yield anchor, parse_source(read_source(path))
+        except UnreadableSource as exc:
+            yield anchor, exc
+
+
+def unique_paths(paths: Iterable[Path]) -> list[Path]:
+    """Keep each explicitly selected filesystem path once, in discovery order."""
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for path in paths:
+        absolute = path.absolute()
+        if absolute not in seen:
+            seen.add(absolute)
+            unique.append(path)
+    return unique
+
+
+def analyze_sources(
+    paths: Iterable[Path],
+    project_root: Path,
+    analyze: Callable[[str, ast.Module], Iterable[T]],
+    unreadable: Callable[[str, UnreadableSource], T],
+) -> list[T]:
+    """Analyze every declared source while converting unreadable files to findings."""
+    findings: list[T] = []
+    for anchor, result in parsed_sources(paths, project_root):
+        if isinstance(result, UnreadableSource):
+            findings.append(unreadable(anchor, result))
+        else:
+            findings.extend(analyze(anchor, result))
+    return findings
 
 
 def comment_tokens(source: str) -> list[tokenize.TokenInfo]:
