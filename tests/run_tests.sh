@@ -75,7 +75,8 @@ DEAD_CODE_SOURCE="$(mktemp -d)"
 CLEAN_HOOKS="$(mktemp -d)"
 MOCKS="$(mktemp -d)"
 PYTEST_DESCRIBE="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE"' EXIT
+ENROLLMENT="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 expect "the Tree-sitter core support cap is declared" 0 python -c \
@@ -447,6 +448,53 @@ echo "== scope =="
 mkdir -p empty
 expect "an empty scan fails the comment gate" 1 check-inline-comments --no-baseline empty
 expect "an empty scan fails the dict gate" 1 dict-param-check empty
+
+echo "== enrollment gates =="
+mkdir -p "$ENROLLMENT/hooks"
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: check-hook-scope-contract\n        entry: python hooks/marker.py\n      - id: marker\n        entry: python hooks/marker.py\n      - id: ruff\n' > "$ENROLLMENT/.pre-commit-config.yaml"
+printf 'print(f"clean scope={1}")\n' > "$ENROLLMENT/hooks/marker.py"
+expect_scope "a hook scope contract classifies every configured hook" 3 \
+    check-hook-scope-contract --config "$ENROLLMENT/.pre-commit-config.yaml" --hook-id check-hook-scope-contract \
+    --scope-emitter marker=hooks/marker.py --scope-emitter check-hook-scope-contract=hooks/marker.py \
+    --exempt ruff="upstream hook owns file selection"
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: check-hook-scope-contract\n        entry: python hooks/other.py\n' > "$ENROLLMENT/wrong-entry.yaml"
+expect "a scope emitter must be executed by its hook" 1 check-hook-scope-contract --config "$ENROLLMENT/wrong-entry.yaml" \
+    --hook-id check-hook-scope-contract --scope-emitter check-hook-scope-contract=hooks/marker.py
+git -C "$ENROLLMENT" init -q
+git -C "$ENROLLMENT" config user.email t@t
+git -C "$ENROLLMENT" config user.name t
+printf '[project]\nname = "consumer"\n' > "$ENROLLMENT/pyproject.toml"
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: dependency-audit-python\n        files: ^pyproject\\.toml$\n' > "$ENROLLMENT/audit-hooks.yaml"
+git -C "$ENROLLMENT" add .
+git -C "$ENROLLMENT" commit -qm enrollment
+expect_scope "a manifest audit enrollment is reported" 1 check-manifest-audit-coverage --root "$ENROLLMENT" \
+    --pre-commit-config audit-hooks.yaml --manifest pyproject.toml --audit-hook-prefix dependency-audit-
+mkdir "$ENROLLMENT/nested"
+printf '[project]\nname = "uncovered"\n' > "$ENROLLMENT/nested/pyproject.toml"
+git -C "$ENROLLMENT" add nested/pyproject.toml
+expect "an uncovered staged manifest fails" 1 check-manifest-audit-coverage --root "$ENROLLMENT" \
+    --pre-commit-config audit-hooks.yaml --manifest pyproject.toml --audit-hook-prefix dependency-audit-
+printf 'nested/pyproject.toml\tlegacy audit is tracked separately\n' > "$ENROLLMENT/manifest-exemptions.tsv"
+git -C "$ENROLLMENT" add manifest-exemptions.tsv
+expect_scope "a tracked manifest exemption is live" 2 check-manifest-audit-coverage --root "$ENROLLMENT" \
+    --pre-commit-config audit-hooks.yaml --manifest pyproject.toml --audit-hook-prefix dependency-audit- \
+    --exemptions manifest-exemptions.tsv
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: ruff\n        entry: ruff\n' > "$ENROLLMENT/no-audit-hooks.yaml"
+expect "an empty audit hook derivation fails" 1 check-manifest-audit-coverage --root "$ENROLLMENT" \
+    --pre-commit-config no-audit-hooks.yaml --manifest missing.toml --audit-hook-prefix dependency-audit-
+expect "a zero manifest scan fails" 1 check-manifest-audit-coverage --root "$ENROLLMENT" \
+    --pre-commit-config audit-hooks.yaml --manifest missing.toml --audit-hook-prefix dependency-audit-
+printf 'FROM scratch\n' > "$ENROLLMENT/Dockerfile"
+mkdir "$ENROLLMENT/.quality"
+printf '{"version": 1, "dockerfiles": [{"path": "Dockerfile", "classification": "build"}]}' \
+    > "$ENROLLMENT/.quality/dockerfile-enrollment.json"
+git -C "$ENROLLMENT" add Dockerfile .quality/dockerfile-enrollment.json
+expect_scope "a Dockerfile enrollment is reported" 1 check-dockerfile-enrollment --root "$ENROLLMENT" \
+    --ledger .quality/dockerfile-enrollment.json
+printf '{"version": 1, "dockerfiles": [{"path": "Dockerfile", "classification": []}]}' \
+    > "$ENROLLMENT/.quality/dockerfile-enrollment.json"
+expect "a non-string Dockerfile classification fails cleanly" 1 check-dockerfile-enrollment --root "$ENROLLMENT" \
+    --ledger .quality/dockerfile-enrollment.json
 
 echo "== forbidden mocks =="
 printf 'VALUE = 1\n' > "$MOCKS/clean.py"
