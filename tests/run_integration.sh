@@ -10,7 +10,11 @@ trap 'rm -rf "$TEMPORARY"' EXIT
 run_hook() {
     (
         cd "$CONSUMER"
-        uv run --isolated --with pre-commit==4.6.0 pre-commit run "$1" --all-files
+        if [ "$1" = check-container-image-immutable-assessment ]; then
+            uv run --isolated --with pre-commit==4.6.0 pre-commit run "$1" --hook-stage manual --all-files
+        else
+            uv run --isolated --with pre-commit==4.6.0 pre-commit run "$1" --all-files
+        fi
     )
 }
 
@@ -174,6 +178,8 @@ printf 'FROM scratch\n' > "$CONSUMER/Dockerfile.dev"
 git -C "$CONSUMER" add Dockerfile.dev
 expect_failure "check-dockerfile-enrollment rejects an unclassified Dockerfile" check-dockerfile-enrollment "Dockerfile.dev"
 expect_failure "check-container-image-enrollment rejects an unclassified Dockerfile" check-container-image-enrollment "unclassified Dockerfile: Dockerfile.dev"
+git -C "$CONSUMER" restore --staged Dockerfile.dev
+rm "$CONSUMER/Dockerfile.dev"
 
 printf 'curl -fsS https://example.test/tool.tar.gz -o tool.tar.gz\ncurl -fsS https://example.test/other.tar.gz -o other.tar.gz\n' > "$CONSUMER/download.sh"
 git -C "$CONSUMER" add download.sh
