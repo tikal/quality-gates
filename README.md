@@ -405,6 +405,74 @@ an unscanned stage.
 {"version":1,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"}],"lifecycles":[{"product":"python","cycle":"3.11","eol":"2027-10-24"}]}
 ```
 
+## CI image security
+
+`check-dockerfile-enrollment`, `check-container-image-cves`, and `check-base-image-eol` are policy
+evaluators, not an image-scanning platform. Keep their responsibilities separate: Dockerfile enrollment proves
+that every tracked Dockerfile has one reviewed `pull`, `build`, or rationale-backed `ignore` classification;
+it does not pull, build, or scan an image. The CVE gate evaluates a normalized scanner report against a tracked
+inventory and exception ledger. The EOL gate evaluates tracked Dockerfile `FROM` references whose image names are
+mapped in the consumer lifecycle policy, against a tracked offline lifecycle snapshot. Consumers must map every
+runtime base-image family they intend to govern. Scanner execution and credentials remain consumer-owned CI concerns.
+
+Run Dockerfile enrollment on developer push and in CI. Run image retrieval/build, scanning, report normalization,
+CVE policy evaluation, and lifecycle evaluation in a scheduled security workflow; allow authenticated manual or
+API-triggered runs for remediation. Monitor outside that workflow and alert when a successful assessment result is
+not received within the expected interval. This catches a disabled schedule, a job that never starts, and a red job.
+
+The CI job order is:
+
+1. Run `check-dockerfile-enrollment`.
+2. Use the tracked image inventory as the complete scan-target list. Consumer CI owns a reviewed two-way mapping:
+   each non-ignored Dockerfile enrollment maps to one or more inventory references, and every inventory reference
+   maps to a deployed immutable digest or build target. Dockerfile enrollment deliberately does not encode that
+   repository-specific mapping. Fail the workflow for an unmapped non-ignored Dockerfile or orphaned inventory
+   reference. Pull or build every inventory target on a Docker-capable worker and retain the mapping from inventory
+   reference to resolved digest or build result.
+3. Scan that exact resolved digest/build result with a scanner image/version pinned by digest or another immutable
+   identity. The normalizer must preserve evidence linking each report reference to the artifact it scanned; matching
+   `scanned_images` names alone does not prove artifact identity.
+4. Convert that run's raw scanner output to a fresh normalized report whose `scanned_images` exactly equal the
+   tracked inventory references and whose `scanned_units` is their count.
+5. Run `check-container-image-cves` with that generated report and the tracked exception ledger.
+6. Run `check-base-image-eol` with the tracked lifecycle snapshot and an explicit CI `--as-of` date.
+
+The following is a CI-system-neutral job shape for a Linux/POSIX-shell worker. Adapt the YAML keys and the clock
+command for the chosen CI provider and runner; a PowerShell or Windows worker needs its shell's equivalent command.
+
+```yaml
+image-security:
+  runner-image: scanner.example/tool@sha256:REVIEWED_DIGEST
+  cache: scanner-database-only
+  script:
+    - check-dockerfile-enrollment --ledger .quality/dockerfile-enrollment.json
+    - build_or_pull_every_inventory_image
+    - scan_and_normalize_images .quality-ci/image-report.json
+    - check-container-image-cves --inventory .quality/images.json --report .quality-ci/image-report.json --exceptions .quality/image-exceptions.json
+    - AS_OF=$(date -u '+%Y-%m-%d')
+    - check-base-image-eol --policy .quality/base-image-lifecycles.json --as-of "$AS_OF"
+  artifacts:
+    when: always
+    retention: 7 days
+    paths: [raw-scanner-output/, .quality-ci/image-report.json]
+```
+
+Use masked, least-privilege, registry-host-scoped read credentials and do not log their configuration. Cache only
+reproducible scanner databases, with a consumer-configured maximum age and verified provenance; refresh or fail when
+the database is too old or its source cannot be verified. Do not cache registry credentials, tokens, mutable image
+results, or a prior normalized report as current evidence. Bound scanner and build timeouts; a retry can address a
+transient failure, but the final failure must remain visible and nonzero.
+
+An unavailable registry, failed authentication, unavailable Docker builder, deferred/unscanned target, scanner
+timeout, advisory-database download failure, nonzero scanner exit, empty or malformed output, or incomplete image
+coverage is an assessment failure, not a clean result. Retain the raw scanner output and normalized report as
+short-lived CI artifacts, especially on failure. Do not commit generated reports unless the repository deliberately
+treats them as reviewed snapshots.
+
+Keep exceptions narrow: one CVE identity and one image reference with rationale. Do not use an exception for a
+whole image, scanner outage, inaccessible registry, or unscanned target. Re-triage/remove an exception when the
+scanner no longer reports it or the image reference changes.
+
 ### check-duplication
 
 Runs `jscpd` against a declared source scope. The hook installs the exact `jscpd@5.0.16`
