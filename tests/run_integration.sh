@@ -97,6 +97,7 @@ echo '== packaged pre-commit hooks =='
 expect_pass "check-inline-comments allows clean source" check-inline-comments
 expect_pass "dict-param-check grandfathers an existing annotation" dict-param-check
 expect_pass "check-marker-budget allows the committed marker" check-marker-budget
+expect_pass "check-marker-preservation allows a clean tracked source tree" check-marker-preservation
 expect_pass "check-generated-artifact-freshness allows a clean staged artifact" check-generated-artifact-freshness
 expect_pass "check-dead-code allows used code" check-dead-code
 expect_pass "check-forbidden-mocks allows clean source" check-forbidden-mocks
