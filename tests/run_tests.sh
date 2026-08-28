@@ -741,6 +741,20 @@ printf 'def describe_widget():\n    def given_an_authenticated_user():\n        
 expect_scope "a clean pytest-describe scan reports its test-file scope" 1 check-pytest-describe "$PYTEST_DESCRIBE"
 expect_scope "a repeated pytest-describe path is read once" 1 \
     check-pytest-describe "$PYTEST_DESCRIBE/test_clean.py" "$PYTEST_DESCRIBE/test_clean.py"
+printf 'def describe_widget_when_disabled():\n    def test_widget_when_disabled():\n        assert True\n' \
+    > "$PYTEST_DESCRIBE/test_custom_condition_infix.py"
+expect "custom condition infixes replace the defaults" 0 check-pytest-describe \
+    --condition-infix _unless_ --condition-infix _except_ "$PYTEST_DESCRIBE/test_custom_condition_infix.py"
+printf 'def describe_widget_unless_disabled():\n    def test_widget_except_disabled():\n        assert True\n' \
+    > "$PYTEST_DESCRIBE/test_custom_condition_infix_violation.py"
+expect_says "each custom condition infix is enforced" "embeds '_unless_'" check-pytest-describe \
+    --condition-infix _unless_ --condition-infix _except_ "$PYTEST_DESCRIBE/test_custom_condition_infix_violation.py"
+expect_says "a repeated custom condition infix is enforced" "embeds '_except_'" check-pytest-describe \
+    --condition-infix _unless_ --condition-infix _except_ "$PYTEST_DESCRIBE/test_custom_condition_infix_violation.py"
+mkdir -p "$PYTEST_DESCRIBE/valid-root" "$PYTEST_DESCRIBE/empty-explicit-root"
+printf 'def describe_root():\n    def test_is_valid():\n        assert True\n' > "$PYTEST_DESCRIBE/valid-root/test_valid.py"
+expect "an explicitly supplied empty pytest-describe root fails despite another valid root" 1 \
+    check-pytest-describe "$PYTEST_DESCRIBE/valid-root" "$PYTEST_DESCRIBE/empty-explicit-root"
 mkdir "$PYTEST_DESCRIBE/empty"
 expect "a zero-file pytest-describe scan fails" 1 check-pytest-describe "$PYTEST_DESCRIBE/empty"
 expect "a missing pytest-describe path fails" 2 check-pytest-describe "$PYTEST_DESCRIBE/missing"
@@ -955,6 +969,12 @@ printf '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n    if [ "$1" = "--output" ]; then\
 chmod +x fake-bin/jscpd
 expect "a strict scope mismatch fails" 1 env PATH="$PWD/fake-bin:$PATH" check-duplication --root . --format python \
     --ext '\.py$' --min-lines 2 --min-tokens 5 --select tree --threshold 0 --strict-scope
+
+echo "== focused gate contracts =="
+bash "$PACKAGE_ROOT/tests/test_base_image_eol_explicit.sh"
+bash "$PACKAGE_ROOT/tests/test_container_image_enrollment.sh"
+bash "$PACKAGE_ROOT/tests/test_generated_artifacts_hardening.sh"
+bash "$PACKAGE_ROOT/tests/test_container_immutable_assessment.sh"
 
 echo
 echo "==== PASS=$PASS FAIL=$FAIL"

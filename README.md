@@ -1,6 +1,6 @@
 # quality-gates
 
-Sixteen code quality gates, run as pre-commit hooks. Every repository-specific value is a
+Eighteen code quality gates, run as pre-commit hooks. Every repository-specific value is a
 command-line argument, so one copy serves many repositories.
 
 ## Use
@@ -49,7 +49,8 @@ intended reviewed commit before you commit the update.
 The metadata supplies policy defaults, not a guarantee that an arbitrary repository is clean.
 Baselines, declared source paths, and strict budgets need consumer setup. `check-forbidden-mocks`, `check-pytest-describe`, `check-hook-scope-contract`,
 `check-manifest-audit-coverage`, `check-dockerfile-enrollment`, `check-marker-preservation`, `check-generated-artifact-freshness`,
-`check-downloaded-asset-enrollment`, `check-vulnerability-exceptions`, `check-container-image-cves`, and `check-base-image-eol` are opt-in. The mock gate
+`check-downloaded-asset-enrollment`, `check-vulnerability-exceptions`, `check-container-image-cves`,
+`check-container-image-enrollment`, `check-container-image-immutable-assessment`, and `check-base-image-eol` are opt-in. The mock gate
 requires a consumer to set `--factory-location PATH`; configure the pytest-describe gate with
 its intended test roots and each enrollment gate with its consumer policy inputs. The defaults are deliberately strict: the marker budget defaults to
 `--ceiling 0`, so a repository must state the number it wants.
@@ -195,6 +196,13 @@ The hook executes consumer-configured argv, so it is deliberately opt-in. Treat 
 its staged inputs as code execution: review changes to both, and enable this gate in trusted CI
 before or alongside developer pre-commit use. Do not add it to an environment that automatically
 runs untrusted repository configuration.
+
+Use `--reject-extra-outputs` when the declared artifacts must be the generator's complete output
+set. Use `--clear-env` to start the generator with no inherited environment (apart from
+`QUALITY_GATES_OUTPUT_DIR` and `PWD`), then add only required settings with `--env NAME=VALUE` or
+`--inherit-env NAME`. `--timeout-seconds` is bounded to 1--300 seconds and defaults to 30. These
+options make the generator's input and output boundary explicit; retain consumer-specific command,
+environment, timeout, and artifact policy values rather than adopting example values blindly.
 
 ### check-dead-code
 
@@ -382,11 +390,77 @@ whole inventory was scanned.
 {"version":1,"scanned_units":2,"scanned_images":["registry.example/api:1","registry.example/worker:1"],"findings":[]}
 ```
 
+### check-container-image-enrollment
+
+This opt-in gate validates the reviewed graph between every tracked `Dockerfile*` and a tracked
+container image inventory. Both `--ledger` and `--inventory` must be tracked; the gate reads every
+tracked Dockerfile and fails on unreadable files, zero Dockerfiles, unclassified or stale Dockerfile
+entries, missing or orphaned inventory mappings, and mappings to ignored or unknown Dockerfiles.
+It does not build or pull images, run Docker, execute a scanner, or create CI evidence.
+
+The version-1 ledger has exactly `version`, `dockerfiles`, and `image_sources`. Every Dockerfile
+has one `path` and one classification: `build`, `pull`, or `ignore`; `ignore` also requires a
+nonblank `rationale`. Every inventory ID has exactly one source: a `dockerfile` path, or an
+`external` source with a nonblank rationale. Each non-ignored Dockerfile must source at least one
+inventory ID. The inventory is `{ "version": 1, "images": [{"id":"api","reference":"registry.example/api:1"}] }`;
+IDs are unique and nonempty.
+
+```yaml
+- id: check-container-image-enrollment
+  args: [--ledger, .quality/container-image-enrollment.json, --inventory, .quality/images.json]
+```
+
+```json
+{"version":1,"dockerfiles":[{"path":"services/api/Dockerfile","classification":"build"},{"path":"examples/Dockerfile","classification":"ignore","rationale":"Documentation-only example."}],"image_sources":[{"id":"api","dockerfile":"services/api/Dockerfile"},{"id":"docs","external":"registry.example/docs:1","rationale":"Published by another service."}]}
+```
+
+### check-container-image-immutable-assessment
+
+This opt-in CI policy gate validates consumer-produced immutable assessment evidence. Its strict
+input boundary is intentional: `--enrollment`, `--inventory`, and `--exceptions` are reviewed,
+tracked policy files; `--report` is generated, untracked evidence. Each scan's `raw_evidence.path`
+must also name an untracked file under the repository root, and its lowercase SHA-256 must match
+the file bytes. Do not commit the generated report or raw scanner output merely to satisfy the
+gate. The gate reads and validates evidence only: it does not run Docker, pull or build images, or
+execute a scanner.
+
+`--as-of YYYY-MM-DDTHH:MM:SSZ` and positive `--max-age-hours` are required. A report must contain
+one fresh scan for every enrolled inventory ID, with no duplicates; a scan timestamp cannot be in
+the future or older than the requested age window. The report must be version 2 and contain exactly
+`version`, `enrollment_sha256`, `scans`, and `findings`. `enrollment_sha256` must match the exact
+tracked enrollment-file bytes, so evidence cannot be replayed after enrollment changes.
+
+Every v2 scan contains exactly `image_id`, immutable `artifact_digest` (`sha256:` plus 64 lowercase
+hexadecimal characters), UTC `scanned_at`, and `raw_evidence` (`path` and matching `sha256`). Every
+finding contains exactly `id`, `image_id`, `artifact_digest`, `severity`, `package`, `installed`, and
+`fixes`; its digest must equal the corresponding scan digest. HIGH and CRITICAL findings with fixes
+fail unless handled by a matching exception, and a matching exception for a fixable finding also
+fails. The tracked exception ledger is version 2 with exactly `version` and `exceptions`; each
+exception has exactly `id`, `image_id`, `artifact_digest`, and nonblank `rationale`. Exception and
+finding identity is therefore bound to the immutable artifact, and stale exceptions fail.
+
+```yaml
+- id: check-container-image-immutable-assessment
+  args:
+    - --enrollment
+    - .quality/container-image-enrollment.json
+    - --inventory
+    - .quality/images.json
+    - --report
+    - .quality-ci/immutable-assessment.json
+    - --exceptions
+    - .quality/container-image-exceptions.json
+    - --as-of
+    - "2026-08-28T12:00:00Z"
+    - --max-age-hours
+    - "24"
+```
+
 ### check-base-image-eol
 
 This opt-in gate reads every tracked `Dockerfile*` and checks mapped runtime `FROM` stages against a tracked,
 consumer-owned lifecycle snapshot. The policy maps image names to lifecycle products and cycle forms, supplies
-EOL dates, and makes tests deterministic through `--as-of YYYY-MM-DD`. It fails unknown mapped cycles, past-EOL
+EOL dates, and requires `--as-of YYYY-MM-DD` for deterministic evaluation. It fails unknown mapped cycles, past-EOL
 bases, unreadable Dockerfiles, malformed policy data, and zero recognized runtime bases; bases inside
 `--warning-days` are reported as warnings. No network lifecycle API is consulted, so CI cannot pass merely
 because a lifecycle lookup failed.
@@ -409,13 +483,16 @@ an unscanned stage.
 
 ## CI image security
 
-`check-dockerfile-enrollment`, `check-container-image-cves`, and `check-base-image-eol` are policy
-evaluators, not an image-scanning platform. Keep their responsibilities separate: Dockerfile enrollment proves
-that every tracked Dockerfile has one reviewed `pull`, `build`, or rationale-backed `ignore` classification;
-it does not pull, build, or scan an image. The CVE gate evaluates a normalized scanner report against a tracked
-inventory and exception ledger. The EOL gate evaluates tracked Dockerfile `FROM` references whose image names are
-mapped in the consumer lifecycle policy, against a tracked offline lifecycle snapshot. Consumers must map every
-runtime base-image family they intend to govern. Scanner execution and credentials remain consumer-owned CI concerns.
+`check-container-image-enrollment`, `check-container-image-immutable-assessment`, and
+`check-base-image-eol` are policy evaluators, not an image-scanning platform. Keep the boundary
+strict: enrollment policy, inventory, exception ledgers, and lifecycle snapshots are reviewed and
+tracked; scanner reports and raw scanner output are generated, untracked CI evidence. Enrollment
+proves a two-way mapping: every tracked Dockerfile and inventory ID have a reviewed source. Immutable assessment
+proves that fresh evidence is bound to the exact enrollment bytes and resolved artifact digests.
+EOL evaluates mapped tracked Dockerfile `FROM` references against a tracked offline lifecycle
+snapshot. None of these gates pulls or builds images, runs Docker, invokes a scanner, manages
+credentials, or schedules CI; credentials remain consumer-owned. Consumers own that orchestration and must map every runtime base-image
+family they intend to govern.
 
 Run Dockerfile enrollment on developer push and in CI. Run image retrieval/build, scanning, report normalization,
 CVE policy evaluation, and lifecycle evaluation in a scheduled security workflow; allow authenticated manual or
@@ -424,20 +501,21 @@ not received within the expected interval. This catches a disabled schedule, a j
 
 The CI job order is:
 
-1. Run `check-dockerfile-enrollment`.
-2. Use the tracked image inventory as the complete scan-target list. Consumer CI owns a reviewed two-way mapping:
-   each non-ignored Dockerfile enrollment maps to one or more inventory references, and every inventory reference
-   maps to a deployed immutable digest or build target. Dockerfile enrollment deliberately does not encode that
-   repository-specific mapping. Fail the workflow for an unmapped non-ignored Dockerfile or orphaned inventory
-   reference. Pull or build every inventory target on a Docker-capable worker and retain the mapping from inventory
-   reference to resolved digest or build result.
-3. Scan that exact resolved digest/build result with a scanner image/version pinned by digest or another immutable
-   identity. The normalizer must preserve evidence linking each report reference to the artifact it scanned; matching
-   `scanned_images` names alone does not prove artifact identity.
-4. Convert that run's raw scanner output to a fresh normalized report whose `scanned_images` exactly equal the
-   tracked inventory references and whose `scanned_units` is their count.
-5. Run `check-container-image-cves` with that generated report and the tracked exception ledger.
-6. Run `check-base-image-eol` with the tracked lifecycle snapshot and an explicit CI `--as-of` date.
+1. Run `check-container-image-enrollment` against the tracked ledger and inventory.
+2. Use the tracked inventory as the complete target list. Consumer CI resolves each target to an immutable digest or
+build result, retaining its Dockerfile/build or registry provenance.
+3. Scan each exact resolved artifact with a scanner version pinned by digest or another immutable identity. Retain
+raw output as an untracked CI artifact and record its SHA-256.
+4. Generate the v2 immutable assessment report, including the enrollment SHA-256, one fresh digest-bound scan per
+inventory ID, raw-evidence checksums, and digest-bound findings.
+5. Run `check-container-image-immutable-assessment` with an explicit UTC `--as-of` timestamp and a consumer-chosen
+`--max-age-hours`.
+6. Run `check-base-image-eol` with the tracked lifecycle snapshot and its required explicit `--as-of` date.
+
+The legacy v1 evaluator remains available while consumers migrate: its `scanned_images` exactly equal
+the enrolled inventory references; the list must contain no duplicates.
+New assessments should use the immutable gate because tag equality alone cannot
+prove artifact identity.
 
 The following is a CI-system-neutral job shape for a Linux/POSIX-shell worker. Adapt the YAML keys and the clock
 command for the chosen CI provider and runner; a PowerShell or Windows worker needs its shell's equivalent command.
@@ -447,16 +525,16 @@ image-security:
   runner-image: scanner.example/tool@sha256:REVIEWED_DIGEST
   cache: scanner-database-only
   script:
-    - check-dockerfile-enrollment --ledger .quality/dockerfile-enrollment.json
+    - check-container-image-enrollment --ledger .quality/container-image-enrollment.json --inventory .quality/images.json
     - build_or_pull_every_inventory_image
-    - scan_and_normalize_images .quality-ci/image-report.json
-    - check-container-image-cves --inventory .quality/images.json --report .quality-ci/image-report.json --exceptions .quality/image-exceptions.json
-    - AS_OF=$(date -u '+%Y-%m-%d')
-    - check-base-image-eol --policy .quality/base-image-lifecycles.json --as-of "$AS_OF"
+    - scan_and_write_immutable_assessment .quality-ci/immutable-assessment.json raw-scanner-output/
+    - AS_OF=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    - check-container-image-immutable-assessment --enrollment .quality/container-image-enrollment.json --inventory .quality/images.json --report .quality-ci/immutable-assessment.json --exceptions .quality/container-image-exceptions.json --as-of "$AS_OF" --max-age-hours 24
+    - check-base-image-eol --policy .quality/base-image-lifecycles.json --as-of "${AS_OF%T*}"
   artifacts:
     when: always
     retention: 7 days
-    paths: [raw-scanner-output/, .quality-ci/image-report.json]
+    paths: [raw-scanner-output/, .quality-ci/immutable-assessment.json]
 ```
 
 Use masked, least-privilege, registry-host-scoped read credentials and do not log their configuration. Cache only
@@ -474,6 +552,25 @@ treats them as reviewed snapshots.
 Keep exceptions narrow: one CVE identity and one image reference with rationale. Do not use an exception for a
 whole image, scanner outage, inaccessible registry, or unscanned target. Re-triage/remove an exception when the
 scanner no longer reports it or the image reference changes.
+
+## Cadence migration
+
+Replace repository-owned Cadence quality scripts with the corresponding gates, but copy each
+consumer's existing paths, baselines, budgets, confidence thresholds, formats, and clone thresholds
+into hook arguments. The gate is the common enforcement mechanism; the policy values remain owned by
+the consumer repository.
+
+| Existing direct script purpose | Current gate | Preserve in consumer configuration |
+| --- | --- | --- |
+| Inline comment or docstring policy | `check-inline-comments` | Source paths and baseline policy (`--baseline` or `--no-baseline`) |
+| Public dict-parameter policy | `dict-param-check` | Source paths and baseline policy |
+| TODO/FIXME/NOTE/HACK/XXX budget | `check-marker-budget` | `--ceiling` and every `--per-file` allowance |
+| Python dead-code check | `check-dead-code` | Each `--path`, exclusions, ignored names, and `--min-confidence` |
+| Copy-paste duplication check | `check-duplication` | Scope selection, paths, formats, extensions, exclusions, minimum lines/tokens, and threshold |
+
+Do not migrate scanner invocation, Docker/build commands, credential handling, report normalization,
+scheduling, or CI artifact retention into these hooks. Keep that operational orchestration in the
+consumer's trusted CI workflow, then pass its generated evidence to the applicable policy gate.
 
 ### check-duplication
 

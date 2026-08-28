@@ -33,7 +33,7 @@ run_pre_commit install --install-hooks
 
 FAKE_BIN="$TEMPORARY/fake-bin"
 mkdir "$FAKE_BIN"
-printf '#!/bin/sh\nlines=\noutput=\nwhile [ "$#" -gt 0 ]; do\n    if [ "$1" = "--min-lines" ]; then\n        lines="$2"\n    fi\n    if [ "$1" = "--output" ]; then\n        output="$2"\n    fi\n    shift\ndone\nmkdir -p "$output"\nif [ "$lines" = 1 ]; then\n    printf "{\\\"statistics\\\": {\\\"total\\\": {\\\"sources\\\": 25}}, \\\"duplicates\\\": %%s}" "$SCOPE_CLONES" > "$output/jscpd-report.json"\n    exit 1\nfi\nprintf "{\\\"statistics\\\": {\\\"total\\\": {\\\"sources\\\": 25}}, \\\"duplicates\\\": []}" > "$output/jscpd-report.json"\n' > "$FAKE_BIN/jscpd"
+printf '#!/bin/sh\nlines=\noutput=\nwhile [ "$#" -gt 0 ]; do\n    if [ "$1" = "--min-lines" ]; then\n        lines="$2"\n    fi\n    if [ "$1" = "--output" ]; then\n        output="$2"\n    fi\n    shift\ndone\nmkdir -p "$output"\nif [ "$lines" = 1 ]; then\n    printf "{\\\"statistics\\\": {\\\"total\\\": {\\\"sources\\\": 32}}, \\\"duplicates\\\": %%s}" "$SCOPE_CLONES" > "$output/jscpd-report.json"\n    exit 1\nfi\nprintf "{\\\"statistics\\\": {\\\"total\\\": {\\\"sources\\\": 32}}, \\\"duplicates\\\": []}" > "$output/jscpd-report.json"\n' > "$FAKE_BIN/jscpd"
 chmod +x "$FAKE_BIN/jscpd"
 
 run_fake_duplication() {
@@ -75,13 +75,13 @@ has_full_duplication_scope() {
 }
 
 if ! diff \
-    <(grep '^- id:' "$CONSUMER/.pre-commit-hooks.yaml" | cut -d ' ' -f3 | grep -v -e '^check-forbidden-mocks$' -e '^check-pytest-describe$' -e '^check-hook-scope-contract$' -e '^check-manifest-audit-coverage$' -e '^check-dockerfile-enrollment$' -e '^check-marker-preservation$' -e '^check-generated-artifact-freshness$' -e '^check-downloaded-asset-enrollment$' -e '^check-vulnerability-exceptions$' -e '^check-container-image-cves$' -e '^check-base-image-eol$' | sort) \
+    <(grep '^- id:' "$CONSUMER/.pre-commit-hooks.yaml" | cut -d ' ' -f3 | grep -v -e '^check-forbidden-mocks$' -e '^check-pytest-describe$' -e '^check-hook-scope-contract$' -e '^check-manifest-audit-coverage$' -e '^check-dockerfile-enrollment$' -e '^check-container-image-enrollment$' -e '^check-container-image-immutable-assessment$' -e '^check-marker-preservation$' -e '^check-generated-artifact-freshness$' -e '^check-downloaded-asset-enrollment$' -e '^check-vulnerability-exceptions$' -e '^check-container-image-cves$' -e '^check-base-image-eol$' | sort) \
     <(grep '^      - id:' "$CONSUMER/.pre-commit-config.yaml" | awk '{print $3}' | sort); then
     printf 'dogfood configuration must apply every non-opt-in exported hook\n' >&2
     exit 1
 fi
 
-for hook in check-forbidden-mocks check-pytest-describe check-hook-scope-contract check-manifest-audit-coverage check-dockerfile-enrollment check-marker-preservation check-generated-artifact-freshness check-downloaded-asset-enrollment check-vulnerability-exceptions check-container-image-cves check-base-image-eol; do
+for hook in check-forbidden-mocks check-pytest-describe check-hook-scope-contract check-manifest-audit-coverage check-dockerfile-enrollment check-container-image-enrollment check-container-image-immutable-assessment check-marker-preservation check-generated-artifact-freshness check-downloaded-asset-enrollment check-vulnerability-exceptions check-container-image-cves check-base-image-eol; do
     if grep -q "^      - id: $hook$" "$CONSUMER/.pre-commit-config.yaml"; then
         printf 'dogfood configuration must not enable opt-in hook %s\n' "$hook" >&2
         exit 1
