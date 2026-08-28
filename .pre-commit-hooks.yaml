@@ -103,6 +103,42 @@
   pass_filenames: false
   require_serial: true
 
+- id: check-downloaded-asset-enrollment
+  name: check downloaded asset enrollment
+  description: Opt in to require reviewed verification classifications for direct external asset acquisition sites.
+  entry: check-downloaded-asset-enrollment
+  language: python
+  always_run: true
+  pass_filenames: false
+  require_serial: true
+
+- id: check-vulnerability-exceptions
+  name: check vulnerability exceptions
+  description: Opt in to fail unhandled fixable scanner findings and stale reviewed exceptions.
+  entry: check-vulnerability-exceptions
+  language: python
+  always_run: true
+  pass_filenames: false
+  require_serial: true
+
+- id: check-container-image-cves
+  name: check container image CVEs
+  description: Opt in to apply image-scoped CVE exception policy to a normalized scanner report.
+  entry: check-container-image-cves
+  language: python
+  always_run: true
+  pass_filenames: false
+  require_serial: true
+
+- id: check-base-image-eol
+  name: check base image end of life
+  description: Opt in to fail tracked Dockerfile runtime bases that are past their consumer-supplied lifecycle date.
+  entry: check-base-image-eol
+  language: python
+  always_run: true
+  pass_filenames: false
+  require_serial: true
+
 - id: check-duplication
   name: check copy-paste duplication
   description: Fail when jscpd finds a clone or reads less than the declared strict scope.

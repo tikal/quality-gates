@@ -1,6 +1,6 @@
 # quality-gates
 
-Twelve code quality gates, run as pre-commit hooks. Every repository-specific value is a
+Sixteen code quality gates, run as pre-commit hooks. Every repository-specific value is a
 command-line argument, so one copy serves many repositories.
 
 ## Use
@@ -48,8 +48,8 @@ intended reviewed commit before you commit the update.
 
 The metadata supplies policy defaults, not a guarantee that an arbitrary repository is clean.
 Baselines, declared source paths, and strict budgets need consumer setup. `check-forbidden-mocks`, `check-pytest-describe`, `check-hook-scope-contract`,
-`check-manifest-audit-coverage`, `check-dockerfile-enrollment`, and `check-marker-preservation`
-and `check-generated-artifact-freshness` are opt-in. The mock gate
+`check-manifest-audit-coverage`, `check-dockerfile-enrollment`, `check-marker-preservation`, `check-generated-artifact-freshness`,
+`check-downloaded-asset-enrollment`, `check-vulnerability-exceptions`, `check-container-image-cves`, and `check-base-image-eol` are opt-in. The mock gate
 requires a consumer to set `--factory-location PATH`; configure the pytest-describe gate with
 its intended test roots and each enrollment gate with its consumer policy inputs. The defaults are deliberately strict: the marker budget defaults to
 `--ceiling 0`, so a repository must state the number it wants.
@@ -303,6 +303,91 @@ The gate verifies scan enrollment only. It does not run Docker, build images, or
 
 ```json
 {"version": 1, "dockerfiles": [{"path": "services/api/Dockerfile", "classification": "build"}, {"path": "examples/legacy/Dockerfile", "classification": "ignore", "rationale": "Documentation-only example."}]}
+```
+
+### check-downloaded-asset-enrollment
+
+This opt-in enrollment gate requires every direct external asset acquisition selected by consumer-supplied
+file and site regular expressions to be recorded in a tracked JSON ledger. Each record identifies an exact
+file/selector pair and declares `sha256`, `signature`, `repository-signature`, `digest`, `unverified`, or
+`ignore`. `unverified` and `ignore` require rationale and fail unless explicitly allowed with `--allow-kind`.
+The gate detects missing, stale, duplicate, unreadable, and ambiguous policy inputs and reports the number of
+matched acquisition sites as `scope=N`. It audits reviewed enrollment; it does not infer shell data flow or
+prove that a command cryptographically verifies downloaded bytes.
+
+```yaml
+- id: check-downloaded-asset-enrollment
+  args: [--ledger, .quality/assets.json, --candidate-file-regex, '(^|/)(Dockerfile|.*\.sh)$', --download-site-regex, 'https://\S+']
+```
+
+### check-vulnerability-exceptions
+
+This opt-in gate applies a tracked exception ledger to a normalized scanner JSON report. The report records
+its tool, target, positive `scanned_units`, and findings with primary ID, aliases, subject, blocking status,
+and available fixes. It fails new blocking findings, accepted blocking findings that now have a fix, malformed
+input, and stale exceptions by default. Use `--stale-exceptions warn` only while deliberately migrating an
+existing exception list. Consumers own scanner execution and translate scanner output to the documented
+normalized report; the gate reports `scope=N` from `scanned_units`.
+
+```json
+{"version":1,"scanned_units":1,"tool":"pip-audit","target":"api","findings":[{"id":"CVE-2026-1","aliases":["GHSA-example"],"subject":"package@1.0","blocking":true,"fixes":["1.1"]}]}
+```
+
+Each finding has exactly `id`, `aliases`, `subject`, `blocking`, and `fixes`; identifier and fix lists hold
+nonblank strings. An exception is `{ "id", "rationale" }` or additionally exact `tool` and `target` scope.
+
+The report has exactly `version`, `scanned_units`, `tool`, `target`, and `findings`; `version` is the integer
+`1` and `scanned_units` is positive. The ledger has exactly `version` and `exceptions`. An exception is either
+`{"id": "CVE-2026-0001", "rationale": "Reviewed reason."}` or the scoped form
+`{"id": "CVE-2026-0001", "rationale": "Reviewed reason.", "tool": "trivy", "target": "api"}`.
+`tool` and `target` are optional only as a pair, and every value is a nonblank string. Scoped exceptions apply
+only to a report with that exact tool and target; an exact scoped match takes precedence over an unscoped match.
+Exception identity is `(id, tool, target)`, so the same vulnerability may have distinct reviewed exceptions for
+different scanner targets.
+
+### check-container-image-cves
+
+This opt-in companion policy consumes a tracked image inventory, a consumer-produced normalized image scanner
+report, and a tracked image-scoped CVE exception ledger. It fails new fixable HIGH/CRITICAL findings, stale
+exceptions, unknown inventory references, incomplete report scope, and malformed input. It deliberately does
+not run Docker, pull images, or choose a scanner; a client can use Trivy or another scanner in its own CI.
+
+```json
+{"version":1,"scanned_units":1,"scanned_images":["registry.example/api:1"],"findings":[{"id":"CVE-2026-1","image":"registry.example/api:1","severity":"HIGH","package":"openssl","installed":"3.0","fixes":["3.1"]}]}
+```
+
+The inventory is `{ "version": 1, "images": [{"id":"api","reference":"registry.example/api:1"}] }`.
+Reports must list each enrolled image exactly once. Image exceptions are `{ "id", "image", "rationale" }` and
+apply to that CVE/image pair; severity is one of `LOW`, `MEDIUM`, `HIGH`, or `CRITICAL`.
+
+The inventory has exactly `version` and `images`, where every image is an `id`/`reference` object and references
+are unique. The report has exactly `version`, `scanned_units`, `scanned_images`, and `findings`.
+`scanned_images` is a unique list of image-reference strings whose set must exactly equal the inventory's
+references; `scanned_units` must equal that list's length. The count is therefore not trusted as proof that the
+whole inventory was scanned.
+
+```json
+{"version":1,"scanned_units":2,"scanned_images":["registry.example/api:1","registry.example/worker:1"],"findings":[]}
+```
+
+### check-base-image-eol
+
+This opt-in gate reads every tracked `Dockerfile*` and checks mapped runtime `FROM` stages against a tracked,
+consumer-owned lifecycle snapshot. The policy maps image names to lifecycle products and cycle forms, supplies
+EOL dates, and makes tests deterministic through `--as-of YYYY-MM-DD`. It fails unknown mapped cycles, past-EOL
+bases, unreadable Dockerfiles, malformed policy data, and zero recognized runtime bases; bases inside
+`--warning-days` are reported as warnings. No network lifecycle API is consulted, so CI cannot pass merely
+because a lifecycle lookup failed.
+
+The policy has exactly `version`, `runtimes`, and `lifecycles`; it has no exception list. Every runtime is an
+`image`/`product`/`cycle` object, with nonblank strings and a `cycle` of exactly `major` or `major.minor`.
+Runtime image names are unique. Every lifecycle is a unique `product`/`cycle` pair with a nonblank ISO-8601
+`eol` date. The gate validates every list item and rejects duplicates rather than ignoring malformed entries.
+A mapped runtime image must carry a tag, such as `python:3.11-slim`; `FROM python` is an unknown lifecycle, not
+an unscanned stage.
+
+```json
+{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"}],"lifecycles":[{"product":"python","cycle":"3.11","eol":"2027-10-24"}]}
 ```
 
 ### check-duplication

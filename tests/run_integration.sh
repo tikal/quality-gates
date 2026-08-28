@@ -54,7 +54,7 @@ mkdir -p "$CONSUMER"
 git -C "$CONSUMER" init -q
 git -C "$CONSUMER" config user.email test@example.com
 git -C "$CONSUMER" config user.name test
-printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-inline-comments\n        args: [--no-baseline, inline.py]\n      - id: dict-param-check\n        args: [--baseline, .quality/dict-params.txt, dict.py]\n      - id: check-marker-budget\n        args: [--ceiling, "1"]\n      - id: check-marker-preservation\n      - id: check-generated-artifact-freshness\n        args: [--artifact, generated/output.txt, --, python, tools/generate.py]\n      - id: check-dead-code\n        args: [--path, dead.py, --min-confidence, "80"]\n      - id: check-forbidden-mocks\n        args: [--factory-location, tests/factories.py, mocks.py]\n      - id: check-pytest-describe\n        args: [test_shape.py]\n      - id: check-hook-scope-contract\n        args: [--config, scope-contract.yaml, --hook-id, check-hook-scope-contract, --scope-emitter, check-hook-scope-contract=hooks/scope-emitter.py]\n      - id: check-manifest-audit-coverage\n        args: [--manifest, pyproject.toml, --audit-hook-prefix, dependency-audit-, --pre-commit-config, audit-hooks.yaml]\n      - id: check-dockerfile-enrollment\n        args: [--ledger, .quality/dockerfile-enrollment.json]\n      - id: check-duplication\n' \
+printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-inline-comments\n        args: [--no-baseline, inline.py]\n      - id: dict-param-check\n        args: [--baseline, .quality/dict-params.txt, dict.py]\n      - id: check-marker-budget\n        args: [--ceiling, "1"]\n      - id: check-marker-preservation\n      - id: check-generated-artifact-freshness\n        args: [--artifact, generated/output.txt, --, python, tools/generate.py]\n      - id: check-dead-code\n        args: [--path, dead.py, --min-confidence, "80"]\n      - id: check-forbidden-mocks\n        args: [--factory-location, tests/factories.py, mocks.py]\n      - id: check-pytest-describe\n        args: [test_shape.py]\n      - id: check-hook-scope-contract\n        args: [--config, scope-contract.yaml, --hook-id, check-hook-scope-contract, --scope-emitter, check-hook-scope-contract=hooks/scope-emitter.py]\n      - id: check-manifest-audit-coverage\n        args: [--manifest, pyproject.toml, --audit-hook-prefix, dependency-audit-, --pre-commit-config, audit-hooks.yaml]\n      - id: check-dockerfile-enrollment\n        args: [--ledger, .quality/dockerfile-enrollment.json]\n      - id: check-downloaded-asset-enrollment\n        args: [--ledger, .quality/assets.json, --candidate-file-regex, ".*[.]sh$", --download-site-regex, "https://example[.]test/[^ ]+"]\n      - id: check-vulnerability-exceptions\n        args: [--report, audit.json, --ledger, .quality/vulnerabilities.json]\n      - id: check-container-image-cves\n        args: [--inventory, .quality/images.json, --report, image-report.json, --exceptions, .quality/image-cve-exceptions.json]\n      - id: check-base-image-eol\n        args: [--policy, .quality/base-images.json, --as-of, "2026-08-28"]\n      - id: check-duplication\n' \
     "$HOOK_REPOSITORY" "$(git -C "$HOOK_REPOSITORY" rev-parse HEAD)" > "$CONSUMER/.pre-commit-config.yaml"
 mkdir -p "$CONSUMER/.quality" "$CONSUMER/hooks" "$CONSUMER/tools" "$CONSUMER/generated"
 printf 'dict.py\tdict-param\t76e94348139b\t1\n' > "$CONSUMER/.quality/dict-params.txt"
@@ -71,9 +71,20 @@ printf '[project]\nname = "consumer"\nversion = "0.0.0"\nrequires-python = ">=3.
 printf 'repos:\n  - repo: local\n    hooks:\n      - id: check-hook-scope-contract\n        entry: python hooks/scope-emitter.py\n' > "$CONSUMER/scope-contract.yaml"
 printf 'print(f"scope={1}")\n' > "$CONSUMER/hooks/scope-emitter.py"
 printf 'repos:\n  - repo: local\n    hooks:\n      - id: dependency-audit-python\n        files: ^pyproject\\.toml$\n' > "$CONSUMER/audit-hooks.yaml"
-printf 'FROM scratch\n' > "$CONSUMER/Dockerfile"
+printf 'curl -fsS https://example.test/tool.tar.gz -o tool.tar.gz\n' > "$CONSUMER/download.sh"
+printf '{"version":1,"assets":[{"path":"download.sh","selector":"https://example.test/tool.tar.gz","kind":"sha256"}]}' \
+    > "$CONSUMER/.quality/assets.json"
+printf '{"version":1,"scanned_units":1,"tool":"scanner","target":"api","findings":[]}' > "$CONSUMER/audit.json"
+printf '{"version":1,"exceptions":[]}' > "$CONSUMER/.quality/vulnerabilities.json"
+printf '{"version":1,"images":[{"id":"api","reference":"registry.example/api:1"}]}' \
+    > "$CONSUMER/.quality/images.json"
+printf '{"version":1,"scanned_units":1,"scanned_images":["registry.example/api:1"],"findings":[]}' > "$CONSUMER/image-report.json"
+printf '{"version":1,"exceptions":[]}' > "$CONSUMER/.quality/image-cve-exceptions.json"
+printf 'FROM python:3.11-slim\n' > "$CONSUMER/Dockerfile"
 printf '{"version": 1, "dockerfiles": [{"path": "Dockerfile", "classification": "build"}]}' \
     > "$CONSUMER/.quality/dockerfile-enrollment.json"
+printf '{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"}],"lifecycles":[{"product":"python","cycle":"3.11","eol":"2027-10-24"}]}' \
+    > "$CONSUMER/.quality/base-images.json"
 git -C "$CONSUMER" add -A
 git -C "$CONSUMER" commit -qm clean
 
@@ -93,6 +104,10 @@ expect_pass "check-pytest-describe allows valid test nesting" check-pytest-descr
 expect_pass "check-hook-scope-contract allows a classified scope contract" check-hook-scope-contract
 expect_pass "check-manifest-audit-coverage allows an enrolled manifest" check-manifest-audit-coverage
 expect_pass "check-dockerfile-enrollment allows an enrolled Dockerfile" check-dockerfile-enrollment
+expect_pass "check-downloaded-asset-enrollment allows an enrolled asset" check-downloaded-asset-enrollment
+expect_pass "check-vulnerability-exceptions allows a clean scanner report" check-vulnerability-exceptions
+expect_pass "check-container-image-cves allows a clean scanner report" check-container-image-cves
+expect_pass "check-base-image-eol allows a supported base image" check-base-image-eol
 expect_pass "check-duplication allows distinct source" check-duplication
 
 printf '# NOTE: preserve this fact\nVALUE = 2\n' > "$CONSUMER/marker.py"
@@ -143,6 +158,26 @@ expect_failure "check-manifest-audit-coverage rejects an uncovered manifest" che
 printf 'FROM scratch\n' > "$CONSUMER/Dockerfile.dev"
 git -C "$CONSUMER" add Dockerfile.dev
 expect_failure "check-dockerfile-enrollment rejects an unclassified Dockerfile" check-dockerfile-enrollment "Dockerfile.dev"
+
+printf 'curl -fsS https://example.test/tool.tar.gz -o tool.tar.gz\ncurl -fsS https://example.test/other.tar.gz -o other.tar.gz\n' > "$CONSUMER/download.sh"
+git -C "$CONSUMER" add download.sh
+expect_failure "check-downloaded-asset-enrollment rejects an unclassified asset" check-downloaded-asset-enrollment "unclassified asset: download.sh: https://example.test/other.tar.gz"
+
+printf '{"version":1,"scanned_units":1,"tool":"scanner","target":"api","findings":[{"id":"CVE-1","aliases":[],"subject":"pkg@1","blocking":true,"fixes":["2"]}]}' \
+    > "$CONSUMER/audit.json"
+git -C "$CONSUMER" add audit.json
+expect_failure "check-vulnerability-exceptions rejects an unhandled fixable vulnerability" check-vulnerability-exceptions "unhandled vulnerability: CVE-1 (pkg@1)"
+
+printf '{"version":1,"scanned_units":1,"scanned_images":["registry.example/api:1"],"findings":[{"id":"CVE-1","image":"registry.example/api:1","severity":"HIGH","package":"pkg","installed":"1","fixes":["2"]}]}' \
+    > "$CONSUMER/image-report.json"
+git -C "$CONSUMER" add image-report.json
+expect_failure "check-container-image-cves rejects an unhandled fixable CVE" check-container-image-cves "unhandled fixable CVE: CVE-1 (registry.example/api:1)"
+
+printf 'FROM python:3.8-slim\n' > "$CONSUMER/Dockerfile"
+printf '{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"}],"lifecycles":[{"product":"python","cycle":"3.8","eol":"2024-10-07"}]}' \
+    > "$CONSUMER/.quality/base-images.json"
+git -C "$CONSUMER" add Dockerfile .quality/base-images.json
+expect_failure "check-base-image-eol rejects an end-of-life base image" check-base-image-eol "end-of-life base image: Dockerfile: python:3.8-slim ended 2024-10-07"
 
 printf 'def alpha():\n    value_01 = 1\n    value_02 = 2\n    value_03 = 3\n    value_04 = 4\n    value_05 = 5\n    value_06 = 6\n    value_07 = 7\n    value_08 = 8\n    value_09 = 9\n    value_10 = 10\n    value_11 = 11\n    value_12 = 12\n    value_13 = 13\n    value_14 = 14\n    value_15 = 15\n    return value_01 + value_02 + value_03 + value_04 + value_05 + value_06 + value_07 + value_08 + value_09 + value_10 + value_11 + value_12 + value_13 + value_14 + value_15\n' > "$CONSUMER/clone_a.py"
 printf 'def beta():\n    value_01 = 1\n    value_02 = 2\n    value_03 = 3\n    value_04 = 4\n    value_05 = 5\n    value_06 = 6\n    value_07 = 7\n    value_08 = 8\n    value_09 = 9\n    value_10 = 10\n    value_11 = 11\n    value_12 = 12\n    value_13 = 13\n    value_14 = 14\n    value_15 = 15\n    return value_01 + value_02 + value_03 + value_04 + value_05 + value_06 + value_07 + value_08 + value_09 + value_10 + value_11 + value_12 + value_13 + value_14 + value_15\n' > "$CONSUMER/clone_b.py"
