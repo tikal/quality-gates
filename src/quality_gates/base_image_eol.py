@@ -19,7 +19,12 @@ def _arguments() -> argparse.Namespace:
         description="Fail Dockerfile runtime bases whose tracked lifecycle data is end-of-life."
     )
     parser.add_argument("--policy", required=True, type=Path)
-    parser.add_argument("--as-of", type=dt.date.fromisoformat, default=dt.date.today())
+    parser.add_argument(
+        "--as-of",
+        required=True,
+        type=dt.date.fromisoformat,
+        help="assessment date in YYYY-MM-DD form",
+    )
     parser.add_argument("--warning-days", type=int, default=120)
     parser.add_argument("--root", type=Path, default=Path.cwd())
     return parser.parse_args()

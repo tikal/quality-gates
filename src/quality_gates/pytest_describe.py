@@ -54,8 +54,13 @@ def _children(body: list[ast.stmt]) -> dict[str, list[ast.FunctionDef | ast.Asyn
 class DescribeAnalyzer:
     """Collect hierarchy violations from one parsed pytest-describe test module."""
 
-    def __init__(self, path: str) -> None:
+    def __init__(
+        self,
+        path: str,
+        condition_infixes: tuple[str, ...] = CONDITION_INFIXES,
+    ) -> None:
         self.path = path
+        self.condition_infixes = condition_infixes
         self.findings: list[Finding] = []
 
     def analyze(self, tree: ast.Module) -> list[Finding]:
@@ -113,7 +118,7 @@ class DescribeAnalyzer:
                 getattr(self, f"_{kind}")(child)
 
     def _check_conditions(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        for infix in CONDITION_INFIXES:
+        for infix in self.condition_infixes:
             if infix in node.name:
                 self._add(node, f"{node.name} embeds '{infix}'; use a nested block instead")
 
@@ -127,8 +132,12 @@ def _test_files_under(path: Path) -> list[Path]:
     return sorted([*path.rglob("test_*.py"), *path.rglob("conftest.py")])
 
 
-def _analyze_tree(anchor: str, tree: ast.Module) -> list[Finding]:
-    return DescribeAnalyzer(anchor).analyze(tree)
+def _analyze_tree(
+    anchor: str,
+    tree: ast.Module,
+    condition_infixes: tuple[str, ...] = CONDITION_INFIXES,
+) -> list[Finding]:
+    return DescribeAnalyzer(anchor, condition_infixes).analyze(tree)
 
 
 def _unreadable_finding(anchor: str, exc: UnreadableSource) -> Finding:
@@ -144,6 +153,12 @@ def _parse_arguments() -> argparse.Namespace:
         default=Path.cwd(),
         help="root that every reported path is named relative to (default: current directory)",
     )
+    parser.add_argument(
+        "--condition-infix",
+        action="append",
+        default=None,
+        help="condition-name infix to reject; replaces the default infixes when supplied (repeatable)",
+    )
     arguments = parser.parse_args()
     for path in arguments.paths:
         if not path.exists():
@@ -154,16 +169,24 @@ def _parse_arguments() -> argparse.Namespace:
 def main() -> int:
     """Check named test paths against the pytest-describe policy."""
     arguments = _parse_arguments()
-    scanned = unique_paths(file for path in arguments.paths for file in _test_files_under(path))
-    if not scanned:
-        named = ", ".join(str(path) for path in arguments.paths)
+    scanned_by_path = [(path, _test_files_under(path)) for path in arguments.paths]
+    empty_paths = [path for path, files in scanned_by_path if not files]
+    if empty_paths:
+        named = ", ".join(str(path) for path in empty_paths)
         print(
             f"pytest-describe scanned 0 Python test files under {named}; a clean result would be meaningless",
             file=sys.stderr,
         )
         return 1
+    scanned = unique_paths(file for _, files in scanned_by_path for file in files)
+    condition_infixes = tuple(arguments.condition_infix or CONDITION_INFIXES)
 
-    findings = analyze_sources(scanned, arguments.project_root.resolve(), _analyze_tree, _unreadable_finding)
+    findings = analyze_sources(
+        scanned,
+        arguments.project_root.resolve(),
+        lambda anchor, tree: _analyze_tree(anchor, tree, condition_infixes),
+        _unreadable_finding,
+    )
     if not findings:
         print(f"pytest-describe hierarchy is valid across {len(scanned)} Python test files scope={len(scanned)}")
         return 0
