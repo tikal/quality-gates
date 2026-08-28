@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import stat
 import subprocess
 import sys
@@ -31,7 +32,21 @@ def _run(command: list[str], snapshot: Path, output: Path) -> None:
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     env["QUALITY_GATES_OUTPUT_DIR"] = str(output)
     env["PWD"] = str(snapshot)
-    result = subprocess.run(command, cwd=snapshot, env=env, capture_output=True, timeout=30)
+    process = subprocess.Popen(
+        command,
+        cwd=snapshot,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        _, stderr = process.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGTERM)
+        _, stderr = process.communicate(timeout=5)
+        raise RuntimeError(f"generator timed out: {stderr.decode('utf-8', 'replace').strip()}") from None
+    result = subprocess.CompletedProcess(command, process.returncode, stderr=stderr)
     if result.returncode:
         detail = result.stderr.decode("utf-8", "replace").strip() or f"exited {result.returncode}"
         raise RuntimeError(f"generator failed: {detail}")
@@ -53,6 +68,16 @@ def _generated_blob(output: Path, artifact: str) -> bytes:
     if not stat.S_ISREG(path.lstat().st_mode):
         raise RuntimeError(f"{artifact}: generated output must be a regular file")
     return path.read_bytes()
+
+
+def _snapshot(root: Path, destination: Path, artifacts: list[str]) -> None:
+    paths = [path.decode("utf-8") for path in _git(root, ["ls-files", "-z"]).stdout.split(b"\0") if path]
+    for path in paths:
+        if path in artifacts:
+            continue
+        target = destination / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_index_blob(root, path))
 
 
 def main() -> int:  # noqa: C901
@@ -79,7 +104,7 @@ def main() -> int:  # noqa: C901
             for name in ("first", "second"):
                 snapshot = Path(temporary) / f"index-{name}"
                 snapshot.mkdir()
-                _git(root, ["checkout-index", "--all", f"--prefix={snapshot}/"])
+                _snapshot(root, snapshot, arguments.artifact)
                 output = Path(temporary) / name
                 output.mkdir()
                 _run(command, snapshot, output)
