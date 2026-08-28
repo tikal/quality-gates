@@ -77,7 +77,8 @@ MOCKS="$(mktemp -d)"
 PYTEST_DESCRIBE="$(mktemp -d)"
 ENROLLMENT="$(mktemp -d)"
 PRESERVATION="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT" "$PRESERVATION"' EXIT
+ARTIFACTS="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT" "$PRESERVATION" "$ARTIFACTS"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 expect "the Tree-sitter core support cap is declared" 0 python -c \
@@ -556,6 +557,35 @@ printf '# NOTE: preserve this fact\nif True print(1)\n' > "$PRESERVATION/marked.
 git -C "$PRESERVATION" add marked.py
 expect "a tokenizable invalid staged Python source fails closed" 1 \
     check-marker-preservation --root "$PRESERVATION"
+
+echo "== generated artifacts =="
+git -C "$ARTIFACTS" init -q
+git -C "$ARTIFACTS" config user.email t@t
+git -C "$ARTIFACTS" config user.name t
+mkdir -p "$ARTIFACTS/tools" "$ARTIFACTS/generated"
+printf 'payload\n' > "$ARTIFACTS/input.txt"
+printf 'import os; from pathlib import Path; root = Path(os.environ["QUALITY_GATES_OUTPUT_DIR"]); root.joinpath("generated/output.txt").parent.mkdir(parents=True, exist_ok=True); root.joinpath("generated/output.txt").write_bytes(Path("input.txt").read_bytes())\n' > "$ARTIFACTS/tools/generate.py"
+printf 'payload\n' > "$ARTIFACTS/generated/output.txt"
+git -C "$ARTIFACTS" add .
+git -C "$ARTIFACTS" commit -qm generated
+expect_scope "a deterministic staged artifact is fresh" 1 check-generated-artifact-freshness --root "$ARTIFACTS" \
+    --artifact generated/output.txt -- python tools/generate.py
+printf 'changed payload\n' > "$ARTIFACTS/input.txt"
+git -C "$ARTIFACTS" add input.txt
+expect "a staged input change with a stale artifact fails" 1 \
+    check-generated-artifact-freshness --root "$ARTIFACTS" --artifact generated/output.txt -- python tools/generate.py
+printf 'changed payload\n' > "$ARTIFACTS/generated/output.txt"
+expect "a working-tree-only regenerated artifact does not hide staged staleness" 1 \
+    check-generated-artifact-freshness --root "$ARTIFACTS" --artifact generated/output.txt -- python tools/generate.py
+printf '%s\n' 'import os; from pathlib import Path; output = Path(os.environ["QUALITY_GATES_OUTPUT_DIR"]); path = output / "generated/output.txt"; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(output.name)' \
+    > "$ARTIFACTS/tools/nondeterministic.py"
+git -C "$ARTIFACTS" add tools/nondeterministic.py
+expect "a nondeterministic generator fails" 1 check-generated-artifact-freshness --root "$ARTIFACTS" \
+    --artifact generated/output.txt -- python tools/nondeterministic.py
+printf 'declared output\n' > "$ARTIFACTS/generated/missing.txt"
+git -C "$ARTIFACTS" add generated/missing.txt
+expect "a missing declared generated output fails" 1 check-generated-artifact-freshness --root "$ARTIFACTS" \
+    --artifact generated/missing.txt -- python tools/generate.py
 
 echo "== forbidden mocks =="
 printf 'VALUE = 1\n' > "$MOCKS/clean.py"

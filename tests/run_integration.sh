@@ -54,11 +54,14 @@ mkdir -p "$CONSUMER"
 git -C "$CONSUMER" init -q
 git -C "$CONSUMER" config user.email test@example.com
 git -C "$CONSUMER" config user.name test
-printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-inline-comments\n        args: [--no-baseline, inline.py]\n      - id: dict-param-check\n        args: [--baseline, .quality/dict-params.txt, dict.py]\n      - id: check-marker-budget\n        args: [--ceiling, "1"]\n      - id: check-marker-preservation\n      - id: check-dead-code\n        args: [--path, dead.py, --min-confidence, "80"]\n      - id: check-forbidden-mocks\n        args: [--factory-location, tests/factories.py, mocks.py]\n      - id: check-pytest-describe\n        args: [test_shape.py]\n      - id: check-hook-scope-contract\n        args: [--config, scope-contract.yaml, --hook-id, check-hook-scope-contract, --scope-emitter, check-hook-scope-contract=hooks/scope-emitter.py]\n      - id: check-manifest-audit-coverage\n        args: [--manifest, pyproject.toml, --audit-hook-prefix, dependency-audit-, --pre-commit-config, audit-hooks.yaml]\n      - id: check-dockerfile-enrollment\n        args: [--ledger, .quality/dockerfile-enrollment.json]\n      - id: check-duplication\n' \
+printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-inline-comments\n        args: [--no-baseline, inline.py]\n      - id: dict-param-check\n        args: [--baseline, .quality/dict-params.txt, dict.py]\n      - id: check-marker-budget\n        args: [--ceiling, "1"]\n      - id: check-marker-preservation\n      - id: check-generated-artifact-freshness\n        args: [--artifact, generated/output.txt, --, python, tools/generate.py]\n      - id: check-dead-code\n        args: [--path, dead.py, --min-confidence, "80"]\n      - id: check-forbidden-mocks\n        args: [--factory-location, tests/factories.py, mocks.py]\n      - id: check-pytest-describe\n        args: [test_shape.py]\n      - id: check-hook-scope-contract\n        args: [--config, scope-contract.yaml, --hook-id, check-hook-scope-contract, --scope-emitter, check-hook-scope-contract=hooks/scope-emitter.py]\n      - id: check-manifest-audit-coverage\n        args: [--manifest, pyproject.toml, --audit-hook-prefix, dependency-audit-, --pre-commit-config, audit-hooks.yaml]\n      - id: check-dockerfile-enrollment\n        args: [--ledger, .quality/dockerfile-enrollment.json]\n      - id: check-duplication\n' \
     "$HOOK_REPOSITORY" "$(git -C "$HOOK_REPOSITORY" rev-parse HEAD)" > "$CONSUMER/.pre-commit-config.yaml"
-mkdir -p "$CONSUMER/.quality" "$CONSUMER/hooks"
+mkdir -p "$CONSUMER/.quality" "$CONSUMER/hooks" "$CONSUMER/tools" "$CONSUMER/generated"
 printf 'dict.py\tdict-param\t76e94348139b\t1\n' > "$CONSUMER/.quality/dict-params.txt"
 printf 'VALUE = 1\n' > "$CONSUMER/inline.py"
+printf 'payload\n' > "$CONSUMER/input.txt"
+printf 'import os; from pathlib import Path; root = Path(os.environ["QUALITY_GATES_OUTPUT_DIR"]); root.joinpath("generated/output.txt").parent.mkdir(parents=True, exist_ok=True); root.joinpath("generated/output.txt").write_bytes(Path("input.txt").read_bytes())\n' > "$CONSUMER/tools/generate.py"
+printf 'payload\n' > "$CONSUMER/generated/output.txt"
 printf '# NOTE: preserve this fact\nVALUE = 1\n' > "$CONSUMER/marker.py"
 printf 'def public(value: dict) -> int:\n    return 1\n' > "$CONSUMER/dict.py"
 printf 'def used() -> int:\n    return 1\n\nused()\n' > "$CONSUMER/dead.py"
@@ -83,6 +86,7 @@ echo '== packaged pre-commit hooks =='
 expect_pass "check-inline-comments allows clean source" check-inline-comments
 expect_pass "dict-param-check grandfathers an existing annotation" dict-param-check
 expect_pass "check-marker-budget allows the committed marker" check-marker-budget
+expect_pass "check-generated-artifact-freshness allows a clean staged artifact" check-generated-artifact-freshness
 expect_pass "check-dead-code allows used code" check-dead-code
 expect_pass "check-forbidden-mocks allows clean source" check-forbidden-mocks
 expect_pass "check-pytest-describe allows valid test nesting" check-pytest-describe
@@ -98,6 +102,10 @@ expect_pass "check-marker-preservation allows a staged marker-preserving edit" c
 printf 'VALUE = 2\n' > "$CONSUMER/marker.py"
 git -C "$CONSUMER" add marker.py
 expect_failure "check-marker-preservation rejects a staged marker removal" check-marker-preservation "marker preservation failed:"
+
+printf 'stale payload\n' > "$CONSUMER/input.txt"
+git -C "$CONSUMER" add input.txt
+expect_failure "check-generated-artifact-freshness rejects a stale staged artifact" check-generated-artifact-freshness "generated/output.txt: staged bytes differ from generated output"
 
 printf 'VALUE = 1  # plain comment\n' > "$CONSUMER/inline.py"
 git -C "$CONSUMER" add inline.py
