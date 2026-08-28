@@ -114,7 +114,7 @@
 
 - id: check-vulnerability-exceptions
   name: check vulnerability exceptions
-  description: Opt in to fail unhandled fixable scanner findings and stale reviewed exceptions.
+  description: Opt in to fail unhandled blocking scanner findings, accepted findings with fixes, and stale reviewed exceptions.
   entry: check-vulnerability-exceptions
   language: python
   always_run: true

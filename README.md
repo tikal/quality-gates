@@ -336,6 +336,11 @@ normalized report; the gate reports `scope=N` from `scanned_units`.
 Each finding has exactly `id`, `aliases`, `subject`, `blocking`, and `fixes`; identifier and fix lists hold
 nonblank strings. An exception is `{ "id", "rationale" }` or additionally exact `tool` and `target` scope.
 
+```yaml
+- id: check-vulnerability-exceptions
+  args: [--report, .quality/audit.json, --ledger, .quality/vulnerabilities.json, --stale-exceptions, fail]
+```
+
 The report has exactly `version`, `scanned_units`, `tool`, `target`, and `findings`; `version` is the integer
 `1` and `scanned_units` is positive. The ledger has exactly `version` and `exceptions`. An exception is either
 `{"id": "CVE-2026-0001", "rationale": "Reviewed reason."}` or the scoped form
@@ -360,6 +365,11 @@ The inventory is `{ "version": 1, "images": [{"id":"api","reference":"registry.e
 Reports must list each enrolled image exactly once. Image exceptions are `{ "id", "image", "rationale" }` and
 apply to that CVE/image pair; severity is one of `LOW`, `MEDIUM`, `HIGH`, or `CRITICAL`.
 
+```yaml
+- id: check-container-image-cves
+  args: [--inventory, .quality/images.json, --report, .quality/image-report.json, --exceptions, .quality/image-exceptions.json]
+```
+
 The inventory has exactly `version` and `images`, where every image is an `id`/`reference` object and references
 are unique. The report has exactly `version`, `scanned_units`, `scanned_images`, and `findings`.
 `scanned_images` is a unique list of image-reference strings whose set must exactly equal the inventory's
@@ -378,6 +388,11 @@ EOL dates, and makes tests deterministic through `--as-of YYYY-MM-DD`. It fails 
 bases, unreadable Dockerfiles, malformed policy data, and zero recognized runtime bases; bases inside
 `--warning-days` are reported as warnings. No network lifecycle API is consulted, so CI cannot pass merely
 because a lifecycle lookup failed.
+
+```yaml
+- id: check-base-image-eol
+  args: [--policy, .quality/base-image-lifecycles.json, --as-of, "2026-08-28", --warning-days, "120"]
+```
 
 The policy has exactly `version`, `runtimes`, and `lifecycles`; it has no exception list. Every runtime is an
 `image`/`product`/`cycle` object, with nonblank strings and a `cycle` of exactly `major` or `major.minor`.

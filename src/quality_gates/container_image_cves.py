@@ -100,9 +100,10 @@ def _evaluate_findings(
         for fix in item["fixes"]:
             text(fix, f"finding {number} fix")
         key = (identifier, image)
-        if key in allowed:
+        requires_exception = severity in {"HIGH", "CRITICAL"} and bool(item["fixes"])
+        if requires_exception and key in allowed:
             seen.add(key)
-        elif severity in {"HIGH", "CRITICAL"} and item["fixes"]:
+        elif requires_exception:
             failures.append(f"unhandled fixable CVE: {identifier} ({image})")
     return failures, seen
 
