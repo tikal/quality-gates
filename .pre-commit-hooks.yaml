@@ -1,6 +1,6 @@
 - id: check-inline-comments
   name: check inline comments and docstrings
-  description: Fail on a plain inline comment, an over-long marker block, or a docstring on a private function.
+  description: Fail on a plain comment, an over-long marker block or module docstring, or a docstring on a private function.
   entry: check-inline-comments
   language: python
   types: [python]
@@ -20,7 +20,7 @@
 
 - id: check-marker-budget
   name: marker budget
-  description: Cap the number of TODO/FIXME/NOTE marker blocks a repository may hold.
+  description: Cap the number of TODO/FIXME/NOTE/HACK/XXX marker blocks a repository may hold.
   entry: check-marker-budget
   language: python
   always_run: true

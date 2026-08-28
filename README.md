@@ -5,17 +5,30 @@ command-line argument, so one copy serves many repositories.
 
 ## Use
 
+Start with the policy you intend to adopt. This minimal configuration works in any Git repository;
+set the ceiling to the marker budget your repository has reviewed.
+
+```yaml
+repos:
+  - repo: https://github.com/tikal/quality-gates
+    rev: afc57504c07e827cf108764dad1ab1e06204c155  # reviewed commit
+    hooks:
+      - id: check-marker-budget
+        args: [--ceiling, "20"]
+```
+
+Add only the policies and paths that match your repository. This Python-oriented example uses
+`src` and `tests` as explicit consumer choices, not package defaults:
+
 ```yaml
 repos:
   - repo: https://github.com/tikal/quality-gates
     rev: afc57504c07e827cf108764dad1ab1e06204c155  # reviewed commit
     hooks:
       - id: check-inline-comments
-        args: [--baseline, .quality/inline-comments.txt]
+        args: [--baseline, .quality/inline-comments.txt, src]
       - id: dict-param-check
         args: [--baseline, .quality/dict-params.txt, src]
-      - id: check-marker-budget
-        args: [--ceiling, "20"]
       - id: check-marker-preservation
       - id: check-dead-code
         args: [--path, src, --path, tests, --min-confidence, "80"]
