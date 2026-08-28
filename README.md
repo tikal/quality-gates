@@ -417,15 +417,18 @@ runtime base-image family they intend to govern. Scanner execution and credentia
 
 Run Dockerfile enrollment on developer push and in CI. Run image retrieval/build, scanning, report normalization,
 CVE policy evaluation, and lifecycle evaluation in a scheduled security workflow; allow authenticated manual or
-API-triggered runs for remediation. Configure an external notification for a failed schedule, so a disabled,
+API-triggered runs for remediation. Monitor outside that workflow and alert when a successful assessment result is
+not received within the expected interval. This catches a disabled schedule, a job that never starts, and a red job.
 
 The CI job order is:
 
 1. Run `check-dockerfile-enrollment`.
-2. Use the tracked image inventory as the complete scan-target list. Consumer CI maps each inventory reference to
-   a deployed immutable digest or to its build target; Dockerfile enrollment deliberately does not encode that
-   repository-specific mapping. Pull or build every inventory target on a Docker-capable worker and retain the
-   mapping from inventory reference to resolved digest or build result.
+2. Use the tracked image inventory as the complete scan-target list. Consumer CI owns a reviewed two-way mapping:
+   each non-ignored Dockerfile enrollment maps to one or more inventory references, and every inventory reference
+   maps to a deployed immutable digest or build target. Dockerfile enrollment deliberately does not encode that
+   repository-specific mapping. Fail the workflow for an unmapped non-ignored Dockerfile or orphaned inventory
+   reference. Pull or build every inventory target on a Docker-capable worker and retain the mapping from inventory
+   reference to resolved digest or build result.
 3. Scan that exact resolved digest/build result with a scanner image/version pinned by digest or another immutable
    identity. The normalizer must preserve evidence linking each report reference to the artifact it scanned; matching
    `scanned_images` names alone does not prove artifact identity.
@@ -434,8 +437,8 @@ The CI job order is:
 5. Run `check-container-image-cves` with that generated report and the tracked exception ledger.
 6. Run `check-base-image-eol` with the tracked lifecycle snapshot and an explicit CI `--as-of` date.
 
-The following is a CI-system-neutral job shape. Adapt the YAML keys for the chosen CI provider and set `AS_OF` with
-that provider's trusted clock or the portable command shown below.
+The following is a CI-system-neutral job shape for a Linux/POSIX-shell worker. Adapt the YAML keys and the clock
+command for the chosen CI provider and runner; a PowerShell or Windows worker needs its shell's equivalent command.
 
 ```yaml
 image-security:
@@ -446,7 +449,7 @@ image-security:
     - build_or_pull_every_inventory_image
     - scan_and_normalize_images .quality-ci/image-report.json
     - check-container-image-cves --inventory .quality/images.json --report .quality-ci/image-report.json --exceptions .quality/image-exceptions.json
-    - AS_OF=$(date -u +%F)
+    - AS_OF=$(date -u '+%Y-%m-%d')
     - check-base-image-eol --policy .quality/base-image-lifecycles.json --as-of "$AS_OF"
   artifacts:
     when: always

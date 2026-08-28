@@ -68,7 +68,7 @@ readme_documents_type_badge() {
 
 readme_documents_image_security_ci() {
     python -c \
-        'import sys; from pathlib import Path; readme = Path(sys.argv[1]).read_text(); required = ("## CI image security", "credentials remain consumer-owned", "scanned_images` exactly equal", "assessment failure, not a clean result", "Retain the raw scanner output", "failed schedule"); missing = [item for item in required if item not in readme]; assert not missing, f"missing CI image security guidance: {missing}"' \
+        'import sys; from pathlib import Path; readme = " ".join(Path(sys.argv[1]).read_text().split()); required = ("## CI image security", "credentials remain consumer-owned", "scanned_images` exactly equal", "assessment failure, not a clean result", "Retain the raw scanner output", "successful assessment result is not received", "two-way mapping"); missing = [item for item in required if item not in readme]; assert not missing, f"missing CI image security guidance: {missing}"' \
         "$1"
 }
 
