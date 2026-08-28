@@ -1,6 +1,6 @@
 # quality-gates
 
-Ten code quality gates, run as pre-commit hooks. Every repository-specific value is a
+Eleven code quality gates, run as pre-commit hooks. Every repository-specific value is a
 command-line argument, so one copy serves many repositories.
 
 ## Use
@@ -15,6 +15,7 @@ command-line argument, so one copy serves many repositories.
       args: [--baseline, .quality/dict-params.txt, src]
     - id: check-marker-budget
       args: [--ceiling, "20", --per-file, "big_module.py=15"]
+    - id: check-marker-preservation
     - id: check-dead-code
       args: [--path, src, --path, tests, --min-confidence, "80"]
     - id: check-forbidden-mocks
@@ -35,7 +36,8 @@ restore the intended commit pin before you commit the update.
 
 Each standard hook ships a working default `args:`, so `pre-commit try-repo` runs without
 configuration. `check-forbidden-mocks`, `check-pytest-describe`, `check-hook-scope-contract`,
-`check-manifest-audit-coverage`, and `check-dockerfile-enrollment` are opt-in. The mock gate
+`check-manifest-audit-coverage`, `check-dockerfile-enrollment`, and `check-marker-preservation`
+are opt-in. The mock gate
 requires a consumer to set `--factory-location PATH`; configure the pytest-describe gate with
 its intended test roots and each enrollment gate with its consumer policy inputs. The defaults are deliberately strict: the marker budget defaults to
 `--ceiling 0`, so a repository must state the number it wants.
@@ -112,6 +114,20 @@ A file may hold ten blocks; `--per-file PATH=N` raises or lowers that for one fi
 
 A per-file entry that a file no longer needs is reported, so the budget cannot drift
 above what the code uses.
+
+### check-marker-preservation
+
+This opt-in, pre-commit-only gate compares staged index blobs with their `HEAD` versions and fails
+when an exact marker header disappears. It protects `TODO`, `FIXME`, `NOTE`, `HACK`, and `XXX`
+comments in `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.go`, and `.sh` source files. Parsed
+comment nodes/tokens count; marker-looking literal data does not.
+
+The gate reads the index, not working-tree files, so unstaged edits cannot hide a staged removal.
+It preserves a multiset of exact, stripped header text within one path, so same-file relocation is
+allowed but rewording and cross-file moves are not. An initial commit uses an empty baseline.
+Renames are conservatively treated as deletion plus addition. Decode and parse failures on either
+blob, including Bash heredocs, fail the gate. Generated filenames and shared skipped directories
+are out of scope. A clean run reports staged eligible paths as `scope=N`; zero scope fails.
 
 Python files are read through `tokenize`. JavaScript, TypeScript, TSX, Go, and Bash files use
 the bundled Tree-sitter grammars from `tree-sitter-language-pack`. Marker text in literal data

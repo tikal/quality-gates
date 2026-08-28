@@ -28,6 +28,16 @@
   pass_filenames: false
   require_serial: true
 
+- id: check-marker-preservation
+  name: check staged marker preservation
+  description: Opt in to prevent staged source changes from deleting marker headers.
+  entry: check-marker-preservation
+  language: python
+  stages: [pre-commit]
+  files: '\.(py|ts|tsx|js|jsx|mjs|go|sh)$'
+  pass_filenames: false
+  require_serial: true
+
 - id: check-dead-code
   name: check dead Python code
   description: Fail when Vulture finds unused code in hook-declared paths. Consumer [tool.vulture] settings are ignored.

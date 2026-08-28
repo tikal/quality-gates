@@ -54,11 +54,12 @@ mkdir -p "$CONSUMER"
 git -C "$CONSUMER" init -q
 git -C "$CONSUMER" config user.email test@example.com
 git -C "$CONSUMER" config user.name test
-printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-inline-comments\n        args: [--no-baseline, inline.py]\n      - id: dict-param-check\n        args: [--baseline, .quality/dict-params.txt, dict.py]\n      - id: check-marker-budget\n      - id: check-dead-code\n        args: [--path, dead.py, --min-confidence, "80"]\n      - id: check-forbidden-mocks\n        args: [--factory-location, tests/factories.py, mocks.py]\n      - id: check-pytest-describe\n        args: [test_shape.py]\n      - id: check-hook-scope-contract\n        args: [--config, scope-contract.yaml, --hook-id, check-hook-scope-contract, --scope-emitter, check-hook-scope-contract=hooks/scope-emitter.py]\n      - id: check-manifest-audit-coverage\n        args: [--manifest, pyproject.toml, --audit-hook-prefix, dependency-audit-, --pre-commit-config, audit-hooks.yaml]\n      - id: check-dockerfile-enrollment\n        args: [--ledger, .quality/dockerfile-enrollment.json]\n      - id: check-duplication\n' \
+printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-inline-comments\n        args: [--no-baseline, inline.py]\n      - id: dict-param-check\n        args: [--baseline, .quality/dict-params.txt, dict.py]\n      - id: check-marker-budget\n        args: [--ceiling, "1"]\n      - id: check-marker-preservation\n      - id: check-dead-code\n        args: [--path, dead.py, --min-confidence, "80"]\n      - id: check-forbidden-mocks\n        args: [--factory-location, tests/factories.py, mocks.py]\n      - id: check-pytest-describe\n        args: [test_shape.py]\n      - id: check-hook-scope-contract\n        args: [--config, scope-contract.yaml, --hook-id, check-hook-scope-contract, --scope-emitter, check-hook-scope-contract=hooks/scope-emitter.py]\n      - id: check-manifest-audit-coverage\n        args: [--manifest, pyproject.toml, --audit-hook-prefix, dependency-audit-, --pre-commit-config, audit-hooks.yaml]\n      - id: check-dockerfile-enrollment\n        args: [--ledger, .quality/dockerfile-enrollment.json]\n      - id: check-duplication\n' \
     "$HOOK_REPOSITORY" "$(git -C "$HOOK_REPOSITORY" rev-parse HEAD)" > "$CONSUMER/.pre-commit-config.yaml"
 mkdir -p "$CONSUMER/.quality" "$CONSUMER/hooks"
 printf 'dict.py\tdict-param\t76e94348139b\t1\n' > "$CONSUMER/.quality/dict-params.txt"
 printf 'VALUE = 1\n' > "$CONSUMER/inline.py"
+printf '# NOTE: preserve this fact\nVALUE = 1\n' > "$CONSUMER/marker.py"
 printf 'def public(value: dict) -> int:\n    return 1\n' > "$CONSUMER/dict.py"
 printf 'def used() -> int:\n    return 1\n\nused()\n' > "$CONSUMER/dead.py"
 printf 'VALUE = 1\n' > "$CONSUMER/mocks.py"
@@ -81,7 +82,7 @@ git -C "$CONSUMER" commit -qm clean
 echo '== packaged pre-commit hooks =='
 expect_pass "check-inline-comments allows clean source" check-inline-comments
 expect_pass "dict-param-check grandfathers an existing annotation" dict-param-check
-expect_pass "check-marker-budget allows no markers" check-marker-budget
+expect_pass "check-marker-budget allows the committed marker" check-marker-budget
 expect_pass "check-dead-code allows used code" check-dead-code
 expect_pass "check-forbidden-mocks allows clean source" check-forbidden-mocks
 expect_pass "check-pytest-describe allows valid test nesting" check-pytest-describe
@@ -89,6 +90,14 @@ expect_pass "check-hook-scope-contract allows a classified scope contract" check
 expect_pass "check-manifest-audit-coverage allows an enrolled manifest" check-manifest-audit-coverage
 expect_pass "check-dockerfile-enrollment allows an enrolled Dockerfile" check-dockerfile-enrollment
 expect_pass "check-duplication allows distinct source" check-duplication
+
+printf '# NOTE: preserve this fact\nVALUE = 2\n' > "$CONSUMER/marker.py"
+git -C "$CONSUMER" add marker.py
+expect_pass "check-marker-preservation allows a staged marker-preserving edit" check-marker-preservation
+
+printf 'VALUE = 2\n' > "$CONSUMER/marker.py"
+git -C "$CONSUMER" add marker.py
+expect_failure "check-marker-preservation rejects a staged marker removal" check-marker-preservation "marker preservation failed:"
 
 printf 'VALUE = 1  # plain comment\n' > "$CONSUMER/inline.py"
 git -C "$CONSUMER" add inline.py
@@ -98,9 +107,9 @@ printf 'def public(value: dict) -> int:\n    return 1\n\ndef added(value: dict) 
 git -C "$CONSUMER" add dict.py
 expect_failure "dict-param-check rejects a new dict signature" dict-param-check "added(value: dict)"
 
-printf '# TODO: remove this marker\n' > "$CONSUMER/marker.py"
+printf '# TODO: remove this marker\n# FIXME: remove this marker too\n' > "$CONSUMER/marker.py"
 git -C "$CONSUMER" add marker.py
-expect_failure "check-marker-budget rejects a marker" check-marker-budget "repo total: 1 marker blocks"
+expect_failure "check-marker-budget rejects an additional marker" check-marker-budget "repo total: 2 marker blocks"
 
 printf 'def used() -> int:\n    return 1\n    unreachable = 2\n\nused()\n' > "$CONSUMER/dead.py"
 git -C "$CONSUMER" add dead.py

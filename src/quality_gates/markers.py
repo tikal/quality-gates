@@ -6,6 +6,7 @@ so comments are syntax nodes rather than patterns that can match source data.
 
 from __future__ import annotations
 
+import ast
 import re
 from collections.abc import Sequence
 from pathlib import Path
@@ -220,6 +221,17 @@ def count_blocks_in(path: Path) -> int:
     except KeyError as exc:
         raise ValueError(f"no comment reader for {path.suffix}") from exc
     return len(marker_blocks(comments.own_line)) + len(comments.trailing)
+
+
+def marker_headers(source: str, suffix: str) -> list[CommentLine]:
+    """Marker header comments from already-decoded source text."""
+    try:
+        if suffix == ".py":
+            ast.parse(source)
+        comments = COMMENT_READERS[suffix](source)
+    except (KeyError, SyntaxError) as exc:
+        raise ValueError(f"no comment reader for {suffix}") from exc
+    return [*(block[0] for block in marker_blocks(comments.own_line)), *comments.trailing]
 
 
 def is_scannable(relative_path: str) -> bool:
