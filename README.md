@@ -5,37 +5,49 @@ command-line argument, so one copy serves many repositories.
 
 ## Use
 
+Start with the policy you intend to adopt. This minimal configuration works in any Git repository;
+set the ceiling to the marker budget your repository has reviewed.
+
 ```yaml
-- repo: https://github.com/tikal/quality-gates
-  rev: 4a4e9bbb8007e1d55c9d677ea4dd36faf197e8e9  # v0.1.0
-  hooks:
-    - id: check-inline-comments
-      args: [--baseline, .quality/inline-comments.txt]
-    - id: dict-param-check
-      args: [--baseline, .quality/dict-params.txt, src]
-    - id: check-marker-budget
-      args: [--ceiling, "20", --per-file, "big_module.py=15"]
-    - id: check-marker-preservation
-    - id: check-dead-code
-      args: [--path, src, --path, tests, --min-confidence, "80"]
-    - id: check-forbidden-mocks
-      args: [--factory-location, tests/factories.py, tests]
-    - id: check-pytest-describe
-      args: [tests]
-    - id: check-duplication
-      args: [--root, ., --format, "python,bash", --ext, '\.(py|sh)$', --min-lines, "5", --min-tokens, "50", --select, tree, --threshold, "0", --strict-scope]
+repos:
+  - repo: https://github.com/tikal/quality-gates
+    rev: afc57504c07e827cf108764dad1ab1e06204c155  # reviewed commit
+    hooks:
+      - id: check-marker-budget
+        args: [--ceiling, "20"]
+```
+
+Add only the policies and paths that match your repository. This Python-oriented example uses
+`src` and `tests` as explicit consumer choices, not package defaults:
+
+```yaml
+repos:
+  - repo: https://github.com/tikal/quality-gates
+    rev: afc57504c07e827cf108764dad1ab1e06204c155  # reviewed commit
+    hooks:
+      - id: check-inline-comments
+        args: [--baseline, .quality/inline-comments.txt, src]
+      - id: dict-param-check
+        args: [--baseline, .quality/dict-params.txt, src]
+      - id: check-marker-preservation
+      - id: check-dead-code
+        args: [--path, src, --path, tests, --min-confidence, "80"]
+      - id: check-forbidden-mocks
+        args: [--factory-location, tests/factories.py, tests]
+      - id: check-pytest-describe
+        args: [tests]
+      - id: check-duplication
+        args: [--root, ., --format, "python,bash", --ext, '\.(py|sh)$', --min-lines, "5", --min-tokens, "50", --select, tree, --threshold, "0", --strict-scope]
 ```
 
 Pin this repository to a commit, not a tag. Each hook runs code when a consumer commits.
 A tag can be moved, which changes the code consumers run without a reviewed change in their repository.
 
-`v0.1.0` is an annotated tag. `git ls-remote` for `refs/tags/v0.1.0` returns the tag object, not
-the commit. In a checkout, peel the tag with `git rev-list -n 1 v0.1.0` and pin the resulting
-commit. `pre-commit autoupdate` can replace the commit pin with a tag. Review its changes and
-restore the intended commit pin before you commit the update.
+`pre-commit autoupdate` can replace a commit pin with a tag. Review its changes and restore the
+intended reviewed commit before you commit the update.
 
-Each standard hook ships a working default `args:`, so `pre-commit try-repo` runs without
-configuration. `check-forbidden-mocks`, `check-pytest-describe`, `check-hook-scope-contract`,
+The metadata supplies policy defaults, not a guarantee that an arbitrary repository is clean.
+Baselines, declared source paths, and strict budgets need consumer setup. `check-forbidden-mocks`, `check-pytest-describe`, `check-hook-scope-contract`,
 `check-manifest-audit-coverage`, `check-dockerfile-enrollment`, and `check-marker-preservation`
 and `check-generated-artifact-freshness` are opt-in. The mock gate
 requires a consumer to set `--factory-location PATH`; configure the pytest-describe gate with
@@ -53,8 +65,8 @@ intended scope.
 
 ### check-inline-comments
 
-Fails on a plain inline comment, a marker block over ten lines, and a docstring on a
-private function. A comment must be a TODO, a FIXME or a NOTE.
+Fails on a plain comment, a marker block over ten lines, an overlong module docstring, and
+a docstring on a private function. Marker comments may be TODO, FIXME, NOTE, HACK, or XXX.
 
 `--baseline PATH` is required and has no default. A baseline stored beside an installed
 hook would be shared between repositories and could not be written. Pass `--no-baseline`
@@ -109,10 +121,10 @@ grandfathered debt.
 
 ### check-marker-budget
 
-Caps the TODO/FIXME/NOTE blocks a repository may hold. `--ceiling N` sets the total.
+Caps TODO/FIXME/NOTE/HACK/XXX blocks a repository may hold. `--ceiling N` sets the total.
 A file may hold ten blocks; `--per-file PATH=N` raises or lowers that for one file.
 
-A per-file entry that a file no longer needs is reported, so the budget cannot drift
+A raised per-file allowance that a file no longer needs is reported, so extra budget cannot drift
 above what the code uses.
 
 ### check-marker-preservation
@@ -135,7 +147,7 @@ does not count. Syntax errors and invalid UTF-8 fail as unreadable source. A `* 
 inside a Python docstring does not count.
 
 The bundled Bash grammar has known heredoc parsing defects. A Bash file containing a heredoc
-fails the marker budget rather than returning a result that could misread heredoc data as a
+fails both marker gates rather than returning a result that could misread heredoc data as a
 comment.
 
 ### check-generated-artifact-freshness
@@ -163,11 +175,11 @@ An artifact path must be an exact root-relative POSIX path. It cannot be absolut
     - tools/generate.py
 ```
 
-The command runs from a temporary checkout of the complete staged index, not from the working
-tree. Unstaged edits therefore cannot affect the inputs it verifies. The gate runs the same argv
-twice against that snapshot. For each run it sets `QUALITY_GATES_OUTPUT_DIR` to a different empty
-directory. The generator must write each declared artifact below that directory at its declared
-relative path; for example, it writes `generated/output.txt` to
+The command runs from a temporary staged-index snapshot, excluding the declared output artifacts,
+not from the working tree. Unstaged edits therefore cannot affect the inputs it verifies. The gate
+runs the same argv twice against independent snapshots. For each run it sets
+`QUALITY_GATES_OUTPUT_DIR` to a different empty directory. The generator must write each declared
+artifact below that directory at its declared relative path; for example, it writes `generated/output.txt` to
 `$QUALITY_GATES_OUTPUT_DIR/generated/output.txt`. It must not rely on output written into the
 snapshot.
 
@@ -327,16 +339,17 @@ prose. `# TYPE:` is exempt from the comment rules and from every budget.
 package consumes it.
 The exemption remains for downstream compatibility because a downstream repository relies on it.
 
-`check-inline-comments`, `dict-param-check`, and `check-marker-budget` skip `venv`, `.venv`,
+`check-inline-comments`, `dict-param-check`, `check-marker-budget`, and `check-marker-preservation` skip `venv`, `.venv`,
 `node_modules`, `__pycache__` and `_generated` anywhere in a path. `_generated` is in that list
 because generated output is not written by hand, so a rule about how a human writes a comment
 cannot apply to it. `check-dead-code` scans its declared `--path` scope, subject to Vulture
 `--exclude` patterns.
 
 `check-inline-comments` and `dict-param-check` support repeatable `--skip-dir NAME` and
-`--src-dir NAME`. They ADD to their defaults. They can only widen a scan, never narrow it: a
-flag that replaced the defaults could silently drop a whole tree, and the gate would report a
-clean result it never earned. To scan less, name the path you want.
+`--src-dir NAME`. Both add to the defaults: `--src-dir` widens source-directory discovery, while
+`--skip-dir` adds an explicit excluded directory name. Neither option replaces the built-in
+defaults, so a consumer cannot silently clear the standard source or skip sets. To scan less,
+name the path you want.
 
 ## Behaviour every gate shares
 

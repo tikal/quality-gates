@@ -56,7 +56,7 @@ expect_invalid_shrink_baseline() {
 
 readme_example_pins_reviewed_commit() {
     python -c \
-        'import re, sys; from pathlib import Path; example = re.search(r"^```yaml$\n(.*?)^```$", Path(sys.argv[1]).read_text(), re.MULTILINE | re.DOTALL); assert example, "missing YAML example"; revision = re.search(r"^\s+rev:\s+([^\s#]+)", example.group(1), re.MULTILINE); assert revision, "missing rev"; assert revision.group(1) == "4a4e9bbb8007e1d55c9d677ea4dd36faf197e8e9", revision.group(1)' \
+        'import re, sys; from pathlib import Path; example = re.search(r"^```yaml$\n(.*?)^```$", Path(sys.argv[1]).read_text(), re.MULTILINE | re.DOTALL); assert example, "missing YAML example"; assert example.group(1).startswith("repos:\n"), "missing repos root"; revision = re.search(r"^\s+rev:\s+([^\s#]+)", example.group(1), re.MULTILINE); assert revision, "missing rev"; assert revision.group(1) == "afc57504c07e827cf108764dad1ab1e06204c155", revision.group(1)' \
         "$1"
 }
 
