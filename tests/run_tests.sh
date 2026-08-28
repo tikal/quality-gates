@@ -78,6 +78,7 @@ PYTEST_DESCRIBE="$(mktemp -d)"
 ENROLLMENT="$(mktemp -d)"
 PRESERVATION="$(mktemp -d)"
 ARTIFACTS="$(mktemp -d)"
+SECURITY_POLICIES="$(mktemp -d)"
 trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT" "$PRESERVATION" "$ARTIFACTS"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -500,6 +501,90 @@ printf '{"version": 1, "dockerfiles": [{"path": "Dockerfile", "classification": 
     > "$ENROLLMENT/.quality/dockerfile-enrollment.json"
 expect "a non-string Dockerfile classification fails cleanly" 1 check-dockerfile-enrollment --root "$ENROLLMENT" \
     --ledger .quality/dockerfile-enrollment.json
+
+echo "== security policy gates =="
+git -C "$SECURITY_POLICIES" init -q
+git -C "$SECURITY_POLICIES" config user.email t@t
+git -C "$SECURITY_POLICIES" config user.name t
+mkdir -p "$SECURITY_POLICIES/.quality"
+printf 'curl -fsS https://example.test/tool.tar.gz -o tool.tar.gz\n' > "$SECURITY_POLICIES/download.sh"
+printf '{"version":1,"assets":[{"path":"download.sh","selector":"https://example.test/tool.tar.gz","kind":"sha256"}]}' \
+    > "$SECURITY_POLICIES/.quality/assets.json"
+printf '{"version":1,"scanned_units":1,"tool":"scanner","target":"api","findings":[]}' \
+    > "$SECURITY_POLICIES/audit.json"
+printf '{"version":1,"exceptions":[]}' > "$SECURITY_POLICIES/.quality/vulnerabilities.json"
+printf '{"version":1,"images":[{"id":"api","reference":"registry.example/api:1"}]}' \
+    > "$SECURITY_POLICIES/.quality/images.json"
+printf '{"version":1,"scanned_units":1,"scanned_images":["registry.example/api:1"],"findings":[]}' \
+    > "$SECURITY_POLICIES/image-report.json"
+printf 'FROM python:3.11-slim\n' > "$SECURITY_POLICIES/Dockerfile"
+printf '{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"}],"lifecycles":[{"product":"python","cycle":"3.11","eol":"2027-10-24"}]}' \
+    > "$SECURITY_POLICIES/.quality/base-images.json"
+git -C "$SECURITY_POLICIES" add .
+git -C "$SECURITY_POLICIES" commit -qm policies
+expect_scope "a downloaded asset enrollment is reported" 1 check-downloaded-asset-enrollment --root "$SECURITY_POLICIES" \
+    --ledger .quality/assets.json --candidate-file-regex '.*\.sh$' --download-site-regex 'https://example\.test/tool\.tar\.gz'
+expect_scope "a vulnerability ledger scan is reported" 1 check-vulnerability-exceptions --root "$SECURITY_POLICIES" \
+    --report audit.json --ledger .quality/vulnerabilities.json
+expect_scope "a container image CVE scan is reported" 1 check-container-image-cves --root "$SECURITY_POLICIES" \
+    --inventory .quality/images.json --report image-report.json --exceptions .quality/vulnerabilities.json
+expect_scope "a base image lifecycle scan is reported" 1 check-base-image-eol --root "$SECURITY_POLICIES" \
+    --policy .quality/base-images.json --as-of 2026-08-28
+printf '{"version":1,"scanned_units":1,"tool":"scanner","target":"api","findings":[{"id":"CVE-1","aliases":[],"subject":"pkg@1","blocking":true,"fixes":[]}]}' \
+        > "$SECURITY_POLICIES/audit.json"
+printf '{"version":1,"exceptions":[{"id":"CVE-1","rationale":"Reviewed for another target.","tool":"scanner","target":"worker"}]}' \
+        > "$SECURITY_POLICIES/.quality/vulnerabilities.json"
+expect "a scoped vulnerability exception cannot cover another target" 1 \
+        check-vulnerability-exceptions --root "$SECURITY_POLICIES" --report audit.json --ledger .quality/vulnerabilities.json
+printf '{"version":1,"exceptions":[{"id":"CVE-1","rationale":"Reviewed for this target.","tool":"scanner","target":"api"},{"id":"CVE-1","rationale":"Reviewed for another target.","tool":"scanner","target":"worker"}]}' \
+        > "$SECURITY_POLICIES/.quality/vulnerabilities.json"
+expect "distinct scoped vulnerability exceptions are allowed" 0 \
+        check-vulnerability-exceptions --root "$SECURITY_POLICIES" --report audit.json --ledger .quality/vulnerabilities.json --stale-exceptions warn
+printf '{"version":1,"images":[{"id":"api","reference":"registry.example/api:1"},{"id":"worker","reference":"registry.example/worker:1"}]}' \
+        > "$SECURITY_POLICIES/.quality/images.json"
+printf '{"version":1,"scanned_units":2,"scanned_images":["registry.example/api:1"],"findings":[]}' \
+        > "$SECURITY_POLICIES/image-report.json"
+expect "an incomplete container image report fails despite its claimed count" 1 \
+        check-container-image-cves --root "$SECURITY_POLICIES" --inventory .quality/images.json --report image-report.json --exceptions .quality/vulnerabilities.json
+printf 'FROM python:3.11-slim\n' > "$SECURITY_POLICIES/Dockerfile"
+printf '{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"},{"image":"node","product":"node","cycle":"major"},{"image":"node","product":"node","cycle":"major"}],"lifecycles":[{"product":"python","cycle":"3.11","eol":"2027-10-24"}]}' \
+        > "$SECURITY_POLICIES/.quality/base-images.json"
+expect "a duplicate runtime policy entry fails" 1 check-base-image-eol --root "$SECURITY_POLICIES" \
+        --policy .quality/base-images.json --as-of 2026-08-28
+printf '{"version":true,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"}],"lifecycles":[{"product":"python","cycle":"3.11","eol":"2027-10-24"}]}' \
+        > "$SECURITY_POLICIES/.quality/base-images.json"
+expect "a non-integer base image policy version fails" 1 check-base-image-eol --root "$SECURITY_POLICIES" \
+        --policy .quality/base-images.json --as-of 2026-08-28
+printf '{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"},"invalid"],"lifecycles":[{"product":"python","cycle":"3.11","eol":"2027-10-24"}]}' \
+        > "$SECURITY_POLICIES/.quality/base-images.json"
+expect "an invalid runtime policy list item fails" 1 check-base-image-eol --root "$SECURITY_POLICIES" \
+        --policy .quality/base-images.json --as-of 2026-08-28
+printf '{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"}],"lifecycles":[{"product":"python","cycle":"3.11","eol":"2027-10-24"},{"product":"python","cycle":"3.11","eol":"2028-10-24"}]}' \
+        > "$SECURITY_POLICIES/.quality/base-images.json"
+expect "a duplicate lifecycle policy entry fails" 1 check-base-image-eol --root "$SECURITY_POLICIES" \
+        --policy .quality/base-images.json --as-of 2026-08-28
+printf '{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"unsupported"}],"lifecycles":[{"product":"python","cycle":"3.11","eol":"2027-10-24"}]}' \
+        > "$SECURITY_POLICIES/.quality/base-images.json"
+expect "an unsupported runtime cycle mode fails" 1 check-base-image-eol --root "$SECURITY_POLICIES" \
+        --policy .quality/base-images.json --as-of 2026-08-28
+printf 'FROM python\n' > "$SECURITY_POLICIES/Dockerfile"
+printf '{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"}],"lifecycles":[{"product":"python","cycle":"3.11","eol":"2027-10-24"}]}' \
+        > "$SECURITY_POLICIES/.quality/base-images.json"
+expect_says "an untagged mapped runtime image is rejected" "unknown lifecycle: Dockerfile: python" \
+        check-base-image-eol --root "$SECURITY_POLICIES" --policy .quality/base-images.json --as-of 2026-08-28
+printf '{"version":1,"scanned_units":1,"tool":"scanner","target":"api","findings":[{"id":"CVE-1","aliases":[],"subject":"pkg@1","blocking":true,"fixes":["2"]}]}' \
+    > "$SECURITY_POLICIES/audit.json"
+expect "an unhandled fixable vulnerability fails" 1 check-vulnerability-exceptions --root "$SECURITY_POLICIES" \
+    --report audit.json --ledger .quality/vulnerabilities.json
+printf '{"version":1,"scanned_units":1,"scanned_images":["registry.example/api:1"],"findings":[{"id":"CVE-1","image":"registry.example/api:1","severity":"HIGH","package":"pkg","installed":"1","fixes":["2"]}]}' \
+    > "$SECURITY_POLICIES/image-report.json"
+expect "an unhandled fixable container CVE fails" 1 check-container-image-cves --root "$SECURITY_POLICIES" \
+    --inventory .quality/images.json --report image-report.json --exceptions .quality/vulnerabilities.json
+printf 'FROM python:3.8-slim\n' > "$SECURITY_POLICIES/Dockerfile"
+printf '{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"}],"lifecycles":[{"product":"python","cycle":"3.8","eol":"2024-10-07"}]}' \
+    > "$SECURITY_POLICIES/.quality/base-images.json"
+expect "an end-of-life base image fails" 1 check-base-image-eol --root "$SECURITY_POLICIES" \
+    --policy .quality/base-images.json --as-of 2026-08-28
 
 echo "== marker preservation =="
 git -C "$PRESERVATION" init -q

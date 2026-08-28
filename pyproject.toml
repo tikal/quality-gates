@@ -26,6 +26,10 @@ check-manifest-audit-coverage = "quality_gates.manifest_audit_coverage:main"
 check-dockerfile-enrollment = "quality_gates.dockerfile_enrollment:main"
 check-marker-preservation = "quality_gates.marker_preservation:main"
 check-generated-artifact-freshness = "quality_gates.generated_artifacts:main"
+check-downloaded-asset-enrollment = "quality_gates.downloaded_assets:main"
+check-vulnerability-exceptions = "quality_gates.vulnerability_exceptions:main"
+check-container-image-cves = "quality_gates.container_image_cves:main"
+check-base-image-eol = "quality_gates.base_image_eol:main"
 
 [build-system]
 requires = ["hatchling"]
