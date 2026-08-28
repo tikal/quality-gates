@@ -86,6 +86,8 @@ def _index_entry(root: Path, artifact: str) -> tuple[bytes, int]:
 
 
 def _generated_entry(output: Path, artifact: str) -> tuple[bytes, int]:
+    if output.is_symlink() or not output.is_dir():
+        raise RuntimeError(f"{artifact}: generated output root must be a regular directory")
     path = output
     for part in Path(artifact).parts:
         path /= part
