@@ -66,6 +66,12 @@ readme_documents_type_badge() {
         "$1"
 }
 
+readme_documents_image_security_ci() {
+    python -c \
+        'import sys; from pathlib import Path; readme = Path(sys.argv[1]).read_text(); required = ("## CI image security", "credentials remain consumer-owned", "scanned_images` exactly equal", "assessment failure, not a clean result", "Retain the raw scanner output", "failed schedule"); missing = [item for item in required if item not in readme]; assert not missing, f"missing CI image security guidance: {missing}"' \
+        "$1"
+}
+
 TMP="$(mktemp -d)"
 OTHER="$(mktemp -d)"
 TOOLCHAIN="$(mktemp -d)"
@@ -79,7 +85,7 @@ ENROLLMENT="$(mktemp -d)"
 PRESERVATION="$(mktemp -d)"
 ARTIFACTS="$(mktemp -d)"
 SECURITY_POLICIES="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT" "$PRESERVATION" "$ARTIFACTS"' EXIT
+trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT" "$PRESERVATION" "$ARTIFACTS" "$SECURITY_POLICIES"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 expect "the Tree-sitter core support cap is declared" 0 python -c \
@@ -88,6 +94,8 @@ expect "the README consumer example pins the reviewed commit" 0 \
     readme_example_pins_reviewed_commit "$PACKAGE_ROOT/README.md"
 expect "the README documents the TYPE badge exemption" 0 \
     readme_documents_type_badge "$PACKAGE_ROOT/README.md"
+expect "the README documents CI image-security boundaries" 0 \
+    readme_documents_image_security_ci "$PACKAGE_ROOT/README.md"
 printf '# TYPE: records a deliberate typing decision for repository tooling.\nIt remains for downstream compatibility.\n' \
     > "$TMP/type-badge-without-exemption.md"
 expect "the README docs test rejects a TYPE badge without its exemption claim" 1 \
