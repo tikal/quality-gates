@@ -38,6 +38,16 @@
   pass_filenames: false
   require_serial: true
 
+- id: check-generated-artifact-freshness
+  name: check generated artifact freshness
+  description: Opt in to verify deterministic generated artifacts against the staged index.
+  entry: check-generated-artifact-freshness
+  language: python
+  stages: [pre-commit]
+  always_run: true
+  pass_filenames: false
+  require_serial: true
+
 - id: check-dead-code
   name: check dead Python code
   description: Fail when Vulture finds unused code in hook-declared paths. Consumer [tool.vulture] settings are ignored.
