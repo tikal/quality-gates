@@ -550,6 +550,12 @@ printf 'def broken(:\n' > "$PRESERVATION/new-invalid.py"
 git -C "$PRESERVATION" add new-invalid.py
 expect "an invalid newly added staged Python source fails closed" 1 \
     check-marker-preservation --root "$PRESERVATION"
+git -C "$PRESERVATION" restore --staged new-invalid.py
+rm "$PRESERVATION/new-invalid.py"
+printf '# NOTE: preserve this fact\nif True print(1)\n' > "$PRESERVATION/marked.py"
+git -C "$PRESERVATION" add marked.py
+expect "a tokenizable invalid staged Python source fails closed" 1 \
+    check-marker-preservation --root "$PRESERVATION"
 
 echo "== forbidden mocks =="
 printf 'VALUE = 1\n' > "$MOCKS/clean.py"

@@ -34,6 +34,7 @@
   entry: check-marker-preservation
   language: python
   stages: [pre-commit]
+  files: '\.(py|ts|tsx|js|jsx|mjs|go|sh)$'
   pass_filenames: false
   require_serial: true
 
