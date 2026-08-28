@@ -222,6 +222,15 @@ def count_blocks_in(path: Path) -> int:
     return len(marker_blocks(comments.own_line)) + len(comments.trailing)
 
 
+def marker_headers(source: str, suffix: str) -> list[CommentLine]:
+    """Marker header comments from already-decoded source text."""
+    try:
+        comments = COMMENT_READERS[suffix](source)
+    except KeyError as exc:
+        raise ValueError(f"no comment reader for {suffix}") from exc
+    return [*(block[0] for block in marker_blocks(comments.own_line)), *comments.trailing]
+
+
 def is_scannable(relative_path: str) -> bool:
     """True for declared non-generated source files that the marker budget reads."""
     path = Path(relative_path)

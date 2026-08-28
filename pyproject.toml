@@ -24,6 +24,7 @@ check-pytest-describe = "quality_gates.pytest_describe:main"
 check-hook-scope-contract = "quality_gates.hook_scope:main"
 check-manifest-audit-coverage = "quality_gates.manifest_audit_coverage:main"
 check-dockerfile-enrollment = "quality_gates.dockerfile_enrollment:main"
+check-marker-preservation = "quality_gates.marker_preservation:main"
 
 [build-system]
 requires = ["hatchling"]

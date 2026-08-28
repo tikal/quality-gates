@@ -76,7 +76,8 @@ CLEAN_HOOKS="$(mktemp -d)"
 MOCKS="$(mktemp -d)"
 PYTEST_DESCRIBE="$(mktemp -d)"
 ENROLLMENT="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT"' EXIT
+PRESERVATION="$(mktemp -d)"
+trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT" "$PRESERVATION"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 expect "the Tree-sitter core support cap is declared" 0 python -c \
@@ -498,6 +499,57 @@ printf '{"version": 1, "dockerfiles": [{"path": "Dockerfile", "classification": 
     > "$ENROLLMENT/.quality/dockerfile-enrollment.json"
 expect "a non-string Dockerfile classification fails cleanly" 1 check-dockerfile-enrollment --root "$ENROLLMENT" \
     --ledger .quality/dockerfile-enrollment.json
+
+echo "== marker preservation =="
+git -C "$PRESERVATION" init -q
+git -C "$PRESERVATION" config user.email t@t
+git -C "$PRESERVATION" config user.name t
+printf 'VALUE = 1\n' > "$PRESERVATION/unborn.py"
+git -C "$PRESERVATION" add unborn.py
+expect_scope "an initial staged source succeeds" 1 check-marker-preservation --root "$PRESERVATION"
+git -C "$PRESERVATION" commit -qm unborn
+printf '# NOTE: preserve this fact\nVALUE = 1\n' > "$PRESERVATION/marked.py"
+git -C "$PRESERVATION" add marked.py
+git -C "$PRESERVATION" commit -qm marked
+printf 'VALUE = 1\n' > "$PRESERVATION/marked.py"
+git -C "$PRESERVATION" add marked.py
+expect "a staged marker deletion fails" 1 check-marker-preservation --root "$PRESERVATION"
+printf '# NOTE: preserve this fact\nVALUE = 2\n' > "$PRESERVATION/marked.py"
+git -C "$PRESERVATION" add marked.py
+expect_scope "a staged marker-preserving edit reports scope" 1 check-marker-preservation --root "$PRESERVATION"
+git -C "$PRESERVATION" commit -qm preserved
+printf 'VALUE = 3\n# NOTE: preserve this fact\n' > "$PRESERVATION/marked.py"
+git -C "$PRESERVATION" add marked.py
+expect_scope "an exact staged marker relocation reports scope" 1 check-marker-preservation --root "$PRESERVATION"
+git -C "$PRESERVATION" commit -qm relocated
+printf '# NOTE: preserve this fact\ndef broken(:\n' > "$PRESERVATION/marked.py"
+git -C "$PRESERVATION" add marked.py
+expect "an invalid staged marker source fails closed" 1 check-marker-preservation --root "$PRESERVATION"
+git -C "$PRESERVATION" restore --staged marked.py
+git -C "$PRESERVATION" restore marked.py
+git -C "$PRESERVATION" mv marked.py renamed.py
+expect "a staged source rename with a marker fails" 1 check-marker-preservation --root "$PRESERVATION"
+git -C "$PRESERVATION" restore --staged renamed.py
+rm "$PRESERVATION/renamed.py"
+git -C "$PRESERVATION" restore --source=HEAD --staged --worktree marked.py
+git -C "$PRESERVATION" rm -q marked.py
+expect "a staged source deletion with a marker fails" 1 check-marker-preservation --root "$PRESERVATION"
+git -C "$PRESERVATION" restore --source=HEAD --staged --worktree marked.py
+printf 'MARKER = "# NOTE: marker-like Python string literal"\n' > "$PRESERVATION/literal.py"
+git -C "$PRESERVATION" add literal.py
+expect_scope "a marker-like Python string literal creates no obligation" 1 \
+    check-marker-preservation --root "$PRESERVATION"
+git -C "$PRESERVATION" restore --staged literal.py
+rm "$PRESERVATION/literal.py"
+printf 'notes only\n' > "$PRESERVATION/notes.txt"
+git -C "$PRESERVATION" add notes.txt
+expect "zero eligible staged source files fail" 1 check-marker-preservation --root "$PRESERVATION"
+git -C "$PRESERVATION" restore --staged notes.txt
+rm "$PRESERVATION/notes.txt"
+printf 'def broken(:\n' > "$PRESERVATION/new-invalid.py"
+git -C "$PRESERVATION" add new-invalid.py
+expect "an invalid newly added staged Python source fails closed" 1 \
+    check-marker-preservation --root "$PRESERVATION"
 
 echo "== forbidden mocks =="
 printf 'VALUE = 1\n' > "$MOCKS/clean.py"
