@@ -139,7 +139,9 @@ It preserves a multiset of exact, stripped header text within one path, so same-
 allowed but rewording and cross-file moves are not. An initial commit uses an empty baseline.
 Renames are conservatively treated as deletion plus addition. Decode and parse failures on either
 blob, including Bash heredocs, fail the gate. Generated filenames and shared skipped directories
-are out of scope. A clean run reports staged eligible paths as `scope=N`; zero scope fails.
+are out of scope. A clean run reports staged eligible paths as `scope=N`. When no eligible source
+path is staged, it instead compares every tracked eligible source path, so `pre-commit run --all-files`
+remains a meaningful verification. A repository with no eligible tracked source files fails.
 
 Python files are read through `tokenize`. JavaScript, TypeScript, TSX, Go, and Bash files use
 the bundled Tree-sitter grammars from `tree-sitter-language-pack`. Marker text in literal data

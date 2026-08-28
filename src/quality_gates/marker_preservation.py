@@ -41,6 +41,16 @@ def _staged_paths(root: Path) -> list[tuple[str, str]]:
     ]
 
 
+def _tracked_paths(root: Path) -> list[str]:
+    entries = _git(root, ["ls-files", "-z"]).split(b"\0")
+    entries.pop()
+    return [path.decode("utf-8") for path in entries]
+
+
+def _eligible(path: str) -> bool:
+    return is_scannable(path) and not is_in_skipped_directory(Path(path), SKIPPED_DIRECTORIES)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prevent staged source changes from deleting marker headers.")
     parser.add_argument("--root", type=Path, default=Path.cwd())
@@ -51,14 +61,19 @@ def main() -> int:
     except (RuntimeError, UnicodeDecodeError) as exc:
         print(f"marker preservation failed: {exc}", file=sys.stderr)
         return 1
-    changed = [
-        (status, path)
-        for status, path in changed
-        if is_scannable(path) and not is_in_skipped_directory(Path(path), SKIPPED_DIRECTORIES)
-    ]
+    changed = [(status, path) for status, path in changed if _eligible(path)]
     if not changed:
-        print("marker preservation scanned 0 staged source files; a clean result would be meaningless", file=sys.stderr)
-        return 1
+        try:
+            changed = [("M", path) for path in _tracked_paths(root) if _eligible(path)]
+        except (RuntimeError, UnicodeDecodeError) as exc:
+            print(f"marker preservation failed: {exc}", file=sys.stderr)
+            return 1
+        if not changed:
+            print(
+                "marker preservation scanned 0 tracked source files; a clean result would be meaningless",
+                file=sys.stderr,
+            )
+            return 1
     findings: list[str] = []
     for status, path in changed:
         try:

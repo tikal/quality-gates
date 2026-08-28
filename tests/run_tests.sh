@@ -83,9 +83,11 @@ MOCKS="$(mktemp -d)"
 PYTEST_DESCRIBE="$(mktemp -d)"
 ENROLLMENT="$(mktemp -d)"
 PRESERVATION="$(mktemp -d)"
+PRESERVATION_EMPTY="$(mktemp -d)"
+PRESERVATION_INVALID="$(mktemp -d)"
 ARTIFACTS="$(mktemp -d)"
 SECURITY_POLICIES="$(mktemp -d)"
-trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT" "$PRESERVATION" "$ARTIFACTS" "$SECURITY_POLICIES"' EXIT
+trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT" "$PRESERVATION" "$PRESERVATION_EMPTY" "$PRESERVATION_INVALID" "$ARTIFACTS" "$SECURITY_POLICIES"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 expect "the Tree-sitter core support cap is declared" 0 python -c \
@@ -595,6 +597,25 @@ expect "an end-of-life base image fails" 1 check-base-image-eol --root "$SECURIT
     --policy .quality/base-images.json --as-of 2026-08-28
 
 echo "== marker preservation =="
+git -C "$PRESERVATION_EMPTY" init -q
+git -C "$PRESERVATION_EMPTY" config user.email t@t
+git -C "$PRESERVATION_EMPTY" config user.name t
+printf 'notes only\n' > "$PRESERVATION_EMPTY/notes.txt"
+git -C "$PRESERVATION_EMPTY" add notes.txt
+expect "zero tracked source files fail" 1 check-marker-preservation --root "$PRESERVATION_EMPTY"
+
+git -C "$PRESERVATION_INVALID" init -q
+git -C "$PRESERVATION_INVALID" config user.email t@t
+git -C "$PRESERVATION_INVALID" config user.name t
+printf 'def broken(:\n' > "$PRESERVATION_INVALID/broken.py"
+git -C "$PRESERVATION_INVALID" add broken.py
+git -C "$PRESERVATION_INVALID" commit -qm invalid
+printf 'notes only\n' > "$PRESERVATION_INVALID/notes.txt"
+git -C "$PRESERVATION_INVALID" add notes.txt
+expect "an invalid tracked source fails during fallback" 1 check-marker-preservation --root "$PRESERVATION_INVALID"
+expect_says "a fallback parse failure names the source" "broken.py" \
+    check-marker-preservation --root "$PRESERVATION_INVALID"
+
 git -C "$PRESERVATION" init -q
 git -C "$PRESERVATION" config user.email t@t
 git -C "$PRESERVATION" config user.name t
@@ -637,7 +658,8 @@ git -C "$PRESERVATION" restore --staged literal.py
 rm "$PRESERVATION/literal.py"
 printf 'notes only\n' > "$PRESERVATION/notes.txt"
 git -C "$PRESERVATION" add notes.txt
-expect "zero eligible staged source files fail" 1 check-marker-preservation --root "$PRESERVATION"
+expect_scope "no staged source paths fall back to tracked source scope" 2 \
+    check-marker-preservation --root "$PRESERVATION"
 git -C "$PRESERVATION" restore --staged notes.txt
 rm "$PRESERVATION/notes.txt"
 printf 'def broken(:\n' > "$PRESERVATION/new-invalid.py"
