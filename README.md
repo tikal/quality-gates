@@ -241,7 +241,7 @@ in a file, so one repair does not expose a hidden mock violation.
 This gate is opt-in. It validates `test_*.py` and `conftest.py` below the paths it receives;
 pass the test roots explicitly, such as `args: [tests]`. A directory with no matching test files
 fails, as does a test file that cannot be decoded or parsed. A clean run prints `scope=N` for
-the test files it read.
+the test files it read. Every explicitly supplied root must contain at least one matching test file.
 
 The gate enforces this opinionated `pytest-describe` grammar:
 
@@ -257,6 +257,10 @@ The gate enforces this opinionated `pytest-describe` grammar:
 - `test_*` and `it_*` are leaves. They cannot contain a nested hierarchy block.
 - A hierarchy block cannot embed `_when_`, `_with_`, `_without_`, `_and_`, `_given_`, or `_for_`
   in its name. Express that condition with a nested block instead.
+
+Use repeatable `--condition-infix VALUE` to replace that default infix list with the consumer's
+approved vocabulary. For example, `--condition-infix _when_ --condition-infix _with_` preserves
+a policy that only prohibits embedded `when` and `with` conditions.
 
 The gate only recognizes direct function children of a module or hierarchy block. It does not
 classify methods on ordinary classes or nested helper functions outside the declared hierarchy.
@@ -416,13 +420,18 @@ IDs are unique and nonempty.
 
 ### check-container-image-immutable-assessment
 
-This opt-in CI policy gate validates consumer-produced immutable assessment evidence. Its strict
+This opt-in CI policy gate validates consumer-produced immutable assessment evidence. It is published for the
+`manual` pre-commit stage and must be invoked by trusted CI, not normal developer commits. Its strict
 input boundary is intentional: `--enrollment`, `--inventory`, and `--exceptions` are reviewed,
 tracked policy files; `--report` is generated, untracked evidence. Each scan's `raw_evidence.path`
 must also name an untracked file under the repository root, and its lowercase SHA-256 must match
 the file bytes. Do not commit the generated report or raw scanner output merely to satisfy the
 gate. The gate reads and validates evidence only: it does not run Docker, pull or build images, or
 execute a scanner.
+
+The gate validates the integrity, freshness, scope, and immutable-identity claims in consumer-produced evidence.
+It cannot generically prove arbitrary raw scanner bytes describe the claimed artifact; retain scanner-native
+provenance or attestations when that stronger assurance is required.
 
 `--as-of YYYY-MM-DDTHH:MM:SSZ` and positive `--max-age-hours` are required. A report must contain
 one fresh scan for every enrolled inventory ID, with no duplicates; a scan timestamp cannot be in
@@ -567,10 +576,14 @@ the consumer repository.
 | TODO/FIXME/NOTE/HACK/XXX budget | `check-marker-budget` | `--ceiling` and every `--per-file` allowance |
 | Python dead-code check | `check-dead-code` | Each `--path`, exclusions, ignored names, and `--min-confidence` |
 | Copy-paste duplication check | `check-duplication` | Scope selection, paths, formats, extensions, exclusions, minimum lines/tokens, and threshold |
+| Pytest hierarchy and mock restrictions | `check-pytest-describe` and `check-forbidden-mocks` | Test roots, `--factory-location`, and `--condition-infix _when_ --condition-infix _with_` when preserving Cadence's current naming policy |
 
 Do not migrate scanner invocation, Docker/build commands, credential handling, report normalization,
 scheduling, or CI artifact retention into these hooks. Keep that operational orchestration in the
 consumer's trusted CI workflow, then pass its generated evidence to the applicable policy gate.
+Cadence must retain its deploy-manifest image coverage guard until a consumer-side check proves every
+deployment/accessory image is represented in the reviewed inventory. The enrollment gate validates declared mappings;
+it does not parse Kamal, Nomad, or arbitrary deployment configuration.
 
 ### check-duplication
 
