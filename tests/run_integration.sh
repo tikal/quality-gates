@@ -10,7 +10,11 @@ trap 'rm -rf "$TEMPORARY"' EXIT
 run_hook() {
     (
         cd "$CONSUMER"
-        uv run --isolated --with pre-commit==4.6.0 pre-commit run "$1" --all-files
+        if [ "$1" = check-container-image-immutable-assessment ]; then
+            uv run --isolated --with pre-commit==4.6.0 pre-commit run "$1" --hook-stage manual --all-files
+        else
+            uv run --isolated --with pre-commit==4.6.0 pre-commit run "$1" --all-files
+        fi
     )
 }
 
@@ -56,6 +60,8 @@ git -C "$CONSUMER" config user.email test@example.com
 git -C "$CONSUMER" config user.name test
 printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-inline-comments\n        args: [--no-baseline, inline.py]\n      - id: dict-param-check\n        args: [--baseline, .quality/dict-params.txt, dict.py]\n      - id: check-marker-budget\n        args: [--ceiling, "1"]\n      - id: check-marker-preservation\n      - id: check-generated-artifact-freshness\n        args: [--artifact, generated/output.txt, --, python, tools/generate.py]\n      - id: check-dead-code\n        args: [--path, dead.py, --min-confidence, "80"]\n      - id: check-forbidden-mocks\n        args: [--factory-location, tests/factories.py, mocks.py]\n      - id: check-pytest-describe\n        args: [test_shape.py]\n      - id: check-hook-scope-contract\n        args: [--config, scope-contract.yaml, --hook-id, check-hook-scope-contract, --scope-emitter, check-hook-scope-contract=hooks/scope-emitter.py]\n      - id: check-manifest-audit-coverage\n        args: [--manifest, pyproject.toml, --audit-hook-prefix, dependency-audit-, --pre-commit-config, audit-hooks.yaml]\n      - id: check-dockerfile-enrollment\n        args: [--ledger, .quality/dockerfile-enrollment.json]\n      - id: check-downloaded-asset-enrollment\n        args: [--ledger, .quality/assets.json, --candidate-file-regex, ".*[.]sh$", --download-site-regex, "https://example[.]test/[^ ]+"]\n      - id: check-vulnerability-exceptions\n        args: [--report, audit.json, --ledger, .quality/vulnerabilities.json]\n      - id: check-container-image-cves\n        args: [--inventory, .quality/images.json, --report, image-report.json, --exceptions, .quality/image-cve-exceptions.json]\n      - id: check-base-image-eol\n        args: [--policy, .quality/base-images.json, --as-of, "2026-08-28"]\n      - id: check-duplication\n' \
     "$HOOK_REPOSITORY" "$(git -C "$HOOK_REPOSITORY" rev-parse HEAD)" > "$CONSUMER/.pre-commit-config.yaml"
+printf '      - id: check-container-image-enrollment\n        args: [--ledger, .quality/container-image-enrollment.json, --inventory, .quality/images.json]\n      - id: check-container-image-immutable-assessment\n        args: [--enrollment, .quality/container-image-enrollment.json, --inventory, .quality/images.json, --report, .quality-ci/immutable-assessment.json, --exceptions, .quality/container-image-exceptions.json, --as-of, "2026-08-28T12:00:00Z", --max-age-hours, "24"]\n' \
+    >> "$CONSUMER/.pre-commit-config.yaml"
 mkdir -p "$CONSUMER/.quality" "$CONSUMER/hooks" "$CONSUMER/tools" "$CONSUMER/generated"
 printf 'dict.py\tdict-param\t76e94348139b\t1\n' > "$CONSUMER/.quality/dict-params.txt"
 printf 'VALUE = 1\n' > "$CONSUMER/inline.py"
@@ -80,6 +86,9 @@ printf '{"version":1,"images":[{"id":"api","reference":"registry.example/api:1"}
     > "$CONSUMER/.quality/images.json"
 printf '{"version":1,"scanned_units":1,"scanned_images":["registry.example/api:1"],"findings":[]}' > "$CONSUMER/image-report.json"
 printf '{"version":1,"exceptions":[]}' > "$CONSUMER/.quality/image-cve-exceptions.json"
+printf '{"version":1,"dockerfiles":[{"path":"Dockerfile","classification":"build"}],"image_sources":[{"id":"api","dockerfile":"Dockerfile"}]}' \
+    > "$CONSUMER/.quality/container-image-enrollment.json"
+printf '{"version":2,"exceptions":[]}' > "$CONSUMER/.quality/container-image-exceptions.json"
 printf 'FROM python:3.11-slim\n' > "$CONSUMER/Dockerfile"
 printf '{"version": 1, "dockerfiles": [{"path": "Dockerfile", "classification": "build"}]}' \
     > "$CONSUMER/.quality/dockerfile-enrollment.json"
@@ -87,6 +96,13 @@ printf '{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"m
     > "$CONSUMER/.quality/base-images.json"
 git -C "$CONSUMER" add -A
 git -C "$CONSUMER" commit -qm clean
+
+mkdir -p "$CONSUMER/.quality-ci"
+printf '{"scanner":"clean"}' > "$CONSUMER/.quality-ci/raw-api.json"
+enrollment_sha256="$(shasum -a 256 "$CONSUMER/.quality/container-image-enrollment.json" | cut -d ' ' -f 1)"
+raw_evidence_sha256="$(shasum -a 256 "$CONSUMER/.quality-ci/raw-api.json" | cut -d ' ' -f 1)"
+printf '{"version":2,"enrollment_sha256":"%s","scans":[{"image_id":"api","artifact_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scanned_at":"2026-08-28T11:00:00Z","raw_evidence":{"path":".quality-ci/raw-api.json","sha256":"%s"}}],"findings":[]}' \
+    "$enrollment_sha256" "$raw_evidence_sha256" > "$CONSUMER/.quality-ci/immutable-assessment.json"
 
 (
     cd "$CONSUMER"
@@ -108,6 +124,8 @@ expect_pass "check-dockerfile-enrollment allows an enrolled Dockerfile" check-do
 expect_pass "check-downloaded-asset-enrollment allows an enrolled asset" check-downloaded-asset-enrollment
 expect_pass "check-vulnerability-exceptions allows a clean scanner report" check-vulnerability-exceptions
 expect_pass "check-container-image-cves allows a clean scanner report" check-container-image-cves
+expect_pass "check-container-image-enrollment allows complete image coverage" check-container-image-enrollment
+expect_pass "check-container-image-immutable-assessment allows fresh immutable evidence" check-container-image-immutable-assessment
 expect_pass "check-base-image-eol allows a supported base image" check-base-image-eol
 expect_pass "check-duplication allows distinct source" check-duplication
 
@@ -159,6 +177,9 @@ expect_failure "check-manifest-audit-coverage rejects an uncovered manifest" che
 printf 'FROM scratch\n' > "$CONSUMER/Dockerfile.dev"
 git -C "$CONSUMER" add Dockerfile.dev
 expect_failure "check-dockerfile-enrollment rejects an unclassified Dockerfile" check-dockerfile-enrollment "Dockerfile.dev"
+expect_failure "check-container-image-enrollment rejects an unclassified Dockerfile" check-container-image-enrollment "unclassified Dockerfile: Dockerfile.dev"
+git -C "$CONSUMER" restore --staged Dockerfile.dev
+rm "$CONSUMER/Dockerfile.dev"
 
 printf 'curl -fsS https://example.test/tool.tar.gz -o tool.tar.gz\ncurl -fsS https://example.test/other.tar.gz -o other.tar.gz\n' > "$CONSUMER/download.sh"
 git -C "$CONSUMER" add download.sh
@@ -173,6 +194,10 @@ printf '{"version":1,"scanned_units":1,"scanned_images":["registry.example/api:1
     > "$CONSUMER/image-report.json"
 git -C "$CONSUMER" add image-report.json
 expect_failure "check-container-image-cves rejects an unhandled fixable CVE" check-container-image-cves "unhandled fixable CVE: CVE-1 (registry.example/api:1)"
+
+printf '{"version":2,"enrollment_sha256":"%s","scans":[{"image_id":"api","artifact_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scanned_at":"2026-08-28T11:00:00Z","raw_evidence":{"path":".quality-ci/raw-api.json","sha256":"%s"}}],"findings":[{"id":"CVE-1","image_id":"api","artifact_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","severity":"HIGH","package":"pkg","installed":"1","fixes":["2"]}]}' \
+    "$enrollment_sha256" "$raw_evidence_sha256" > "$CONSUMER/.quality-ci/immutable-assessment.json"
+expect_failure "check-container-image-immutable-assessment rejects an unhandled fixable CVE" check-container-image-immutable-assessment "unhandled fixable CVE: CVE-1 (api)"
 
 printf 'FROM python:3.8-slim\n' > "$CONSUMER/Dockerfile"
 printf '{"version":1,"runtimes":[{"image":"python","product":"python","cycle":"major.minor"}],"lifecycles":[{"product":"python","cycle":"3.8","eol":"2024-10-07"}]}' \

@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Paul Soares" }]
-dependencies = ["tree-sitter-language-pack==1.15.8", "tree-sitter>=0.25,<0.27"]
+dependencies = ["tree-sitter-language-pack==1.15.8", "tree-sitter==0.25.2"]
 
 [project.urls]
 Homepage = "https://github.com/tikal/quality-gates"
@@ -29,6 +29,8 @@ check-generated-artifact-freshness = "quality_gates.generated_artifacts:main"
 check-downloaded-asset-enrollment = "quality_gates.downloaded_assets:main"
 check-vulnerability-exceptions = "quality_gates.vulnerability_exceptions:main"
 check-container-image-cves = "quality_gates.container_image_cves:main"
+check-container-image-enrollment = "quality_gates.container_image_enrollment:main"
+check-container-image-immutable-assessment = "quality_gates.container_immutable_assessment:main"
 check-base-image-eol = "quality_gates.base_image_eol:main"
 
 [build-system]

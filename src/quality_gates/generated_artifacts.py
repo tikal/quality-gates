@@ -28,8 +28,30 @@ def _path(value: str) -> str:
     return path.as_posix()
 
 
-def _run(command: list[str], snapshot: Path, output: Path) -> None:
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+def _timeout(value: str) -> int:
+    try:
+        seconds = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("timeout must be an integer from 1 to 300 seconds") from exc
+    if not 1 <= seconds <= 300:
+        raise argparse.ArgumentTypeError("timeout must be an integer from 1 to 300 seconds")
+    return seconds
+
+
+def _environment(value: str) -> tuple[str, str]:
+    key, separator, setting = value.partition("=")
+    if not separator or not key or "\x00" in value:
+        raise argparse.ArgumentTypeError("environment values must use NAME=VALUE")
+    return key, setting
+
+
+def _environment_name(value: str) -> str:
+    if not value or "=" in value or "\x00" in value:
+        raise argparse.ArgumentTypeError("environment names must be nonempty names without =")
+    return value
+
+
+def _run(command: list[str], snapshot: Path, output: Path, timeout: int, env: dict[str, str]) -> None:
     env["QUALITY_GATES_OUTPUT_DIR"] = str(output)
     env["PWD"] = str(snapshot)
     process = subprocess.Popen(
@@ -41,10 +63,14 @@ def _run(command: list[str], snapshot: Path, output: Path) -> None:
         start_new_session=True,
     )
     try:
-        _, stderr = process.communicate(timeout=30)
+        _, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGTERM)
-        _, stderr = process.communicate(timeout=5)
+        try:
+            _, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            _, stderr = process.communicate()
         raise RuntimeError(f"generator timed out: {stderr.decode('utf-8', 'replace').strip()}") from None
     result = subprocess.CompletedProcess(command, process.returncode, stderr=stderr)
     if result.returncode:
@@ -52,14 +78,16 @@ def _run(command: list[str], snapshot: Path, output: Path) -> None:
         raise RuntimeError(f"generator failed: {detail}")
 
 
-def _index_blob(root: Path, artifact: str) -> bytes:
+def _index_entry(root: Path, artifact: str) -> tuple[bytes, int]:
     mode = _git(root, ["ls-files", "-s", "--", artifact]).stdout.split(maxsplit=1)[0]
     if mode != b"100644" and mode != b"100755":
         raise RuntimeError(f"{artifact}: staged artifact must be a regular file")
-    return _git(root, ["show", f":{artifact}"]).stdout
+    return _git(root, ["show", f":{artifact}"]).stdout, int(mode, 8) & 0o777
 
 
-def _generated_blob(output: Path, artifact: str) -> bytes:
+def _generated_entry(output: Path, artifact: str) -> tuple[bytes, int]:
+    if output.is_symlink() or not output.is_dir():
+        raise RuntimeError(f"{artifact}: generated output root must be a regular directory")
     path = output
     for part in Path(artifact).parts:
         path /= part
@@ -67,7 +95,7 @@ def _generated_blob(output: Path, artifact: str) -> bytes:
             raise RuntimeError(f"{artifact}: generated output path must not traverse a symlink")
     if not stat.S_ISREG(path.lstat().st_mode):
         raise RuntimeError(f"{artifact}: generated output must be a regular file")
-    return path.read_bytes()
+    return path.read_bytes(), stat.S_IMODE(path.lstat().st_mode)
 
 
 def _snapshot(root: Path, destination: Path, artifacts: list[str]) -> None:
@@ -77,13 +105,35 @@ def _snapshot(root: Path, destination: Path, artifacts: list[str]) -> None:
             continue
         target = destination / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(_index_blob(root, path))
+        contents, mode = _index_entry(root, path)
+        target.write_bytes(contents)
+        target.chmod(mode)
+
+
+def _extra_outputs(output: Path, artifacts: set[str]) -> list[str]:
+    extras = []
+    for path in output.rglob("*"):
+        relative = path.relative_to(output).as_posix()
+        if relative in artifacts or (path.is_dir() and not path.is_symlink()):
+            continue
+        extras.append(relative)
+    return extras
 
 
 def main() -> int:  # noqa: C901
     parser = argparse.ArgumentParser(description="Verify deterministic generated artifacts against the staged index.")
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--artifact", action="append", type=_path, required=True)
+    parser.add_argument(
+        "--timeout-seconds",
+        type=_timeout,
+        default=30,
+        help="maximum generator runtime in seconds (default: 30; range: 1-300)",
+    )
+    parser.add_argument("--reject-extra-outputs", action="store_true")
+    parser.add_argument("--clear-env", action="store_true")
+    parser.add_argument("--env", action="append", type=_environment, default=[])
+    parser.add_argument("--inherit-env", action="append", type=_environment_name, default=[])
     parser.add_argument("command", nargs=argparse.REMAINDER)
     if "--" not in sys.argv:
         parser.error("a generator argv is required after --")
@@ -94,11 +144,18 @@ def main() -> int:  # noqa: C901
     if len(set(arguments.artifact)) != len(arguments.artifact):
         parser.error("--artifact values must be unique")
     root = arguments.root.resolve()
+    environment = (
+        {} if arguments.clear_env else {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    )
+    environment.update(
+        {key: os.environ[key] for key in arguments.inherit_env if key in os.environ and not key.startswith("GIT_")}
+    )
+    environment.update({key: value for key, value in arguments.env if not key.startswith("GIT_")})
     findings: list[str] = []
     try:
         for artifact in arguments.artifact:
             _git(root, ["ls-files", "--error-unmatch", "--", artifact])
-        staged = {artifact: _index_blob(root, artifact) for artifact in arguments.artifact}
+        staged = {artifact: _index_entry(root, artifact) for artifact in arguments.artifact}
         with tempfile.TemporaryDirectory() as temporary:
             outputs = []
             for name in ("first", "second"):
@@ -107,14 +164,20 @@ def main() -> int:  # noqa: C901
                 _snapshot(root, snapshot, arguments.artifact)
                 output = Path(temporary) / name
                 output.mkdir()
-                _run(command, snapshot, output)
+                _run(command, snapshot, output, arguments.timeout_seconds, environment.copy())
                 outputs.append(output)
+            if arguments.reject_extra_outputs:
+                artifacts = set(arguments.artifact)
+                for output in outputs:
+                    findings.extend(f"{path}: extra generated output" for path in _extra_outputs(output, artifacts))
             for artifact in arguments.artifact:
-                generated = [_generated_blob(output, artifact) for output in outputs]
+                generated = [_generated_entry(output, artifact) for output in outputs]
                 if generated[0] != generated[1]:
                     findings.append(f"{artifact}: generator output is nondeterministic")
-                elif staged[artifact] != generated[0]:
+                elif staged[artifact][0] != generated[0][0]:
                     findings.append(f"{artifact}: staged bytes differ from generated output")
+                elif staged[artifact][1] != generated[0][1]:
+                    findings.append(f"{artifact}: staged mode differs from generated output")
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         findings.append(str(exc))
     if findings:

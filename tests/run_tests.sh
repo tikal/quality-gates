@@ -90,8 +90,10 @@ SECURITY_POLICIES="$(mktemp -d)"
 trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT" "$PRESERVATION" "$PRESERVATION_EMPTY" "$PRESERVATION_INVALID" "$ARTIFACTS" "$SECURITY_POLICIES"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-expect "the Tree-sitter core support cap is declared" 0 python -c \
-    'import tomllib; assert "tree-sitter>=0.25,<0.27" in tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]'
+bash "$PACKAGE_ROOT/tests/test_marker_parser_containment.sh"
+
+expect "the tested Tree-sitter core version is declared" 0 python -c \
+    'import tomllib; assert "tree-sitter==0.25.2" in tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]'
 expect "the README consumer example pins the reviewed commit" 0 \
     readme_example_pins_reviewed_commit "$PACKAGE_ROOT/README.md"
 expect "the README documents the TYPE badge exemption" 0 \
@@ -300,14 +302,15 @@ expect_says "an unclosed Python literal is unreadable" "pkg/broken.py" check-mar
 git rm -q --cached pkg/broken.py
 rm pkg/broken.py
 expect "a shell token containing # is not a comment" 0 check-marker-budget --ceiling 99 --per-file pkg/shell-token.sh=0
-printf 'cat <<EOF\n\tEOF\n# TODO: ordinary heredoc data\nEOF\n' > pkg/heredoc.sh
+printf 'cat <<EOF\n# TODO: marker-looking heredoc data\nEOF\n# TODO: a real comment after the heredoc\n' > pkg/heredoc.sh
 git add pkg/heredoc.sh
-expect "an ordinary heredoc parser limitation fails safely" 1 check-marker-budget --ceiling 99 --per-file pkg/heredoc.sh=0
+expect "a marker-looking heredoc body is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/heredoc.sh=1
+expect "a real comment after a heredoc is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/heredoc.sh=0
 git rm -q --cached pkg/heredoc.sh
 rm pkg/heredoc.sh
 printf 'cat <<\\EOF\ndata\nEOF\n# TODO: a real comment after an escaped delimiter\n' > pkg/heredoc-escaped.sh
 git add pkg/heredoc-escaped.sh
-expect "an escaped heredoc parser limitation fails safely" 1 check-marker-budget --ceiling 99 --per-file pkg/heredoc-escaped.sh=0
+expect "an escaped heredoc retains its real comment" 0 check-marker-budget --ceiling 99 --per-file pkg/heredoc-escaped.sh=1
 git rm -q --cached pkg/heredoc-escaped.sh
 rm pkg/heredoc-escaped.sh
 expect "a JavaScript regex character class is not a comment" 0 check-marker-budget --ceiling 99 --per-file pkg/regex.js=0
@@ -473,6 +476,30 @@ expect_scope "a hook scope contract classifies every configured hook" 3 \
 printf 'repos:\n  - repo: local\n    hooks:\n      - id: check-hook-scope-contract\n        entry: python hooks/other.py\n' > "$ENROLLMENT/wrong-entry.yaml"
 expect "a scope emitter must be executed by its hook" 1 check-hook-scope-contract --config "$ENROLLMENT/wrong-entry.yaml" \
     --hook-id check-hook-scope-contract --scope-emitter check-hook-scope-contract=hooks/marker.py
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash hooks/marker.sh\n' > "$ENROLLMENT/bash-entry.yaml"
+printf 'count=1\nprintf "clean scope=$count\\n"\n' > "$ENROLLMENT/hooks/marker.sh"
+expect_scope "a direct Bash scope emitter is accepted" 1 check-hook-scope-contract --config "$ENROLLMENT/bash-entry.yaml" \
+    --hook-id marker --scope-emitter marker=hooks/marker.sh
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash -c "python hooks/marker.py"\n' > "$ENROLLMENT/bash-command-entry.yaml"
+expect_scope "a direct Python emitter in bash -c is accepted" 1 check-hook-scope-contract \
+    --config "$ENROLLMENT/bash-command-entry.yaml" --hook-id marker --scope-emitter marker=hooks/marker.py
+mkdir -p "$ENROLLMENT/service/hooks"
+printf 'print(f"clean scope={1}")\n' > "$ENROLLMENT/service/hooks/marker.py"
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash -c "cd service && uv run python hooks/marker.py"\n' > "$ENROLLMENT/bash-directory-entry.yaml"
+expect_scope "a scoped Bash directory wrapper is accepted" 1 check-hook-scope-contract \
+    --config "$ENROLLMENT/bash-directory-entry.yaml" --hook-id marker --scope-emitter marker=service/hooks/marker.py
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: uv run python hooks/marker.py\n' > "$ENROLLMENT/uv-entry.yaml"
+expect_scope "a direct Python emitter in uv run is accepted" 1 check-hook-scope-contract --config "$ENROLLMENT/uv-entry.yaml" \
+    --hook-id marker --scope-emitter marker=hooks/marker.py
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash -c "python hooks/marker.py && echo unchecked"\n' > "$ENROLLMENT/unsafe-bash-command-entry.yaml"
+expect "a shell-composed scope emitter is rejected" 1 check-hook-scope-contract --config "$ENROLLMENT/unsafe-bash-command-entry.yaml" \
+    --hook-id marker --scope-emitter marker=hooks/marker.py
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash -c "cd ../service && uv run python hooks/marker.py"\n' > "$ENROLLMENT/escaping-bash-directory-entry.yaml"
+expect "a path-escaping Bash directory wrapper is rejected" 1 check-hook-scope-contract \
+    --config "$ENROLLMENT/escaping-bash-directory-entry.yaml" --hook-id marker --scope-emitter marker=service/hooks/marker.py
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash -c "python hooks/marker.py > scope.log"\n' > "$ENROLLMENT/redirected-bash-command-entry.yaml"
+expect "a redirected Bash scope emitter is rejected" 1 check-hook-scope-contract \
+    --config "$ENROLLMENT/redirected-bash-command-entry.yaml" --hook-id marker --scope-emitter marker=hooks/marker.py
 git -C "$ENROLLMENT" init -q
 git -C "$ENROLLMENT" config user.email t@t
 git -C "$ENROLLMENT" config user.name t
@@ -741,6 +768,20 @@ printf 'def describe_widget():\n    def given_an_authenticated_user():\n        
 expect_scope "a clean pytest-describe scan reports its test-file scope" 1 check-pytest-describe "$PYTEST_DESCRIBE"
 expect_scope "a repeated pytest-describe path is read once" 1 \
     check-pytest-describe "$PYTEST_DESCRIBE/test_clean.py" "$PYTEST_DESCRIBE/test_clean.py"
+printf 'def describe_widget_when_disabled():\n    def test_widget_when_disabled():\n        assert True\n' \
+    > "$PYTEST_DESCRIBE/test_custom_condition_infix.py"
+expect "custom condition infixes replace the defaults" 0 check-pytest-describe \
+    --condition-infix _unless_ --condition-infix _except_ "$PYTEST_DESCRIBE/test_custom_condition_infix.py"
+printf 'def describe_widget_unless_disabled():\n    def test_widget_except_disabled():\n        assert True\n' \
+    > "$PYTEST_DESCRIBE/test_custom_condition_infix_violation.py"
+expect_says "each custom condition infix is enforced" "embeds '_unless_'" check-pytest-describe \
+    --condition-infix _unless_ --condition-infix _except_ "$PYTEST_DESCRIBE/test_custom_condition_infix_violation.py"
+expect_says "a repeated custom condition infix is enforced" "embeds '_except_'" check-pytest-describe \
+    --condition-infix _unless_ --condition-infix _except_ "$PYTEST_DESCRIBE/test_custom_condition_infix_violation.py"
+mkdir -p "$PYTEST_DESCRIBE/valid-root" "$PYTEST_DESCRIBE/empty-explicit-root"
+printf 'def describe_root():\n    def test_is_valid():\n        assert True\n' > "$PYTEST_DESCRIBE/valid-root/test_valid.py"
+expect "an explicitly supplied empty pytest-describe root fails despite another valid root" 1 \
+    check-pytest-describe "$PYTEST_DESCRIBE/valid-root" "$PYTEST_DESCRIBE/empty-explicit-root"
 mkdir "$PYTEST_DESCRIBE/empty"
 expect "a zero-file pytest-describe scan fails" 1 check-pytest-describe "$PYTEST_DESCRIBE/empty"
 expect "a missing pytest-describe path fails" 2 check-pytest-describe "$PYTEST_DESCRIBE/missing"
@@ -955,6 +996,12 @@ printf '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n    if [ "$1" = "--output" ]; then\
 chmod +x fake-bin/jscpd
 expect "a strict scope mismatch fails" 1 env PATH="$PWD/fake-bin:$PATH" check-duplication --root . --format python \
     --ext '\.py$' --min-lines 2 --min-tokens 5 --select tree --threshold 0 --strict-scope
+
+echo "== focused gate contracts =="
+bash "$PACKAGE_ROOT/tests/test_base_image_eol_explicit.sh"
+bash "$PACKAGE_ROOT/tests/test_container_image_enrollment.sh"
+bash "$PACKAGE_ROOT/tests/test_generated_artifacts_hardening.sh"
+bash "$PACKAGE_ROOT/tests/test_container_immutable_assessment.sh"
 
 echo
 echo "==== PASS=$PASS FAIL=$FAIL"
