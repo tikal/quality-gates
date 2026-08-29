@@ -149,9 +149,11 @@ the bundled Tree-sitter grammars from `tree-sitter-language-pack`. Marker text i
 does not count. Syntax errors and invalid UTF-8 fail as unreadable source. A `* NOTE:` bullet
 inside a Python docstring does not count.
 
-The bundled Bash grammar has known heredoc parsing defects. A Bash file containing a heredoc
-fails both marker gates rather than returning a result that could misread heredoc data as a
-comment.
+The Tree-sitter-backed marker hooks pin the tested `tree-sitter==0.25.2` runtime. They fail closed
+if a selected source cannot be parsed safely.
+
+For a valid Bash heredoc, marker-looking text in the heredoc body is ignored while real comments
+outside the body are scanned. Malformed or ambiguous heredoc syntax remains a fail-closed error.
 
 ### check-generated-artifact-freshness
 

@@ -90,8 +90,10 @@ SECURITY_POLICIES="$(mktemp -d)"
 trap 'rm -rf "$TMP" "$OTHER" "$TOOLCHAIN" "$MARKER_SKIPS" "$DEAD_CODE_BIN" "$DEAD_CODE_SOURCE" "$CLEAN_HOOKS" "$MOCKS" "$PYTEST_DESCRIBE" "$ENROLLMENT" "$PRESERVATION" "$PRESERVATION_EMPTY" "$PRESERVATION_INVALID" "$ARTIFACTS" "$SECURITY_POLICIES"' EXIT
 PACKAGE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-expect "the Tree-sitter core support cap is declared" 0 python -c \
-    'import tomllib; assert "tree-sitter>=0.25,<0.27" in tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]'
+bash "$PACKAGE_ROOT/tests/test_marker_parser_containment.sh"
+
+expect "the tested Tree-sitter core version is declared" 0 python -c \
+    'import tomllib; assert "tree-sitter==0.25.2" in tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]'
 expect "the README consumer example pins the reviewed commit" 0 \
     readme_example_pins_reviewed_commit "$PACKAGE_ROOT/README.md"
 expect "the README documents the TYPE badge exemption" 0 \
@@ -300,14 +302,15 @@ expect_says "an unclosed Python literal is unreadable" "pkg/broken.py" check-mar
 git rm -q --cached pkg/broken.py
 rm pkg/broken.py
 expect "a shell token containing # is not a comment" 0 check-marker-budget --ceiling 99 --per-file pkg/shell-token.sh=0
-printf 'cat <<EOF\n\tEOF\n# TODO: ordinary heredoc data\nEOF\n' > pkg/heredoc.sh
+printf 'cat <<EOF\n# TODO: marker-looking heredoc data\nEOF\n# TODO: a real comment after the heredoc\n' > pkg/heredoc.sh
 git add pkg/heredoc.sh
-expect "an ordinary heredoc parser limitation fails safely" 1 check-marker-budget --ceiling 99 --per-file pkg/heredoc.sh=0
+expect "a marker-looking heredoc body is not counted" 0 check-marker-budget --ceiling 99 --per-file pkg/heredoc.sh=1
+expect "a real comment after a heredoc is counted" 1 check-marker-budget --ceiling 99 --per-file pkg/heredoc.sh=0
 git rm -q --cached pkg/heredoc.sh
 rm pkg/heredoc.sh
 printf 'cat <<\\EOF\ndata\nEOF\n# TODO: a real comment after an escaped delimiter\n' > pkg/heredoc-escaped.sh
 git add pkg/heredoc-escaped.sh
-expect "an escaped heredoc parser limitation fails safely" 1 check-marker-budget --ceiling 99 --per-file pkg/heredoc-escaped.sh=0
+expect "an escaped heredoc retains its real comment" 0 check-marker-budget --ceiling 99 --per-file pkg/heredoc-escaped.sh=1
 git rm -q --cached pkg/heredoc-escaped.sh
 rm pkg/heredoc-escaped.sh
 expect "a JavaScript regex character class is not a comment" 0 check-marker-budget --ceiling 99 --per-file pkg/regex.js=0
