@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -38,9 +40,14 @@ def _trailers(message: Path) -> Counter[tuple[str, str]]:
     for line_number, line in enumerate(lines[trailer_start:], start=trailer_start + 1):
         if not line.startswith(_TRAILER):
             continue
-        fields = line.removeprefix(_TRAILER).split("\t")
+        try:
+            value = re.sub(r'"\s+\|', '"|', line.removeprefix(_TRAILER))
+            fields = next(csv.reader([value], delimiter="|", skipinitialspace=True, strict=True))
+        except csv.Error as exc:
+            raise RuntimeError(f"{message}:{line_number}: invalid Marker-Removal quoting: {exc}") from exc
+        fields = [field.strip() for field in fields]
         if len(fields) != 3 or not all(field.strip() for field in fields):
-            raise RuntimeError(f"{message}:{line_number}: Marker-Removal requires PATH<TAB>HEADER<TAB>RATIONALE")
+            raise RuntimeError(f"{message}:{line_number}: Marker-Removal requires PATH | HEADER | RATIONALE")
         path, header, _ = fields
         authorizations[(path, header)] += 1
     return authorizations

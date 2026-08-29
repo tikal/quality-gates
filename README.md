@@ -163,14 +163,21 @@ rationale-backed trailer for each removed header. Do not configure it alongside 
 `check-marker-preservation`: the strict pre-commit gate intentionally permits no removals.
 
 ```yaml
-- id: check-marker-removal-authorization
+default_install_hook_types: [pre-commit, commit-msg]
+repos:
+  - repo: https://github.com/tikal/quality-gates
+    rev: <reviewed revision>
+    hooks:
+      - id: check-marker-removal-authorization
 ```
 
-Each trailer has exactly three tab-separated values: repository-relative path, the full marker
-header as reported by the gate (including its comment prefix), and a nonblank rationale.
+Set `default_install_hook_types` so a normal `pre-commit install` installs the required
+`commit-msg` hook. Each trailer has exactly three pipe-separated values: repository-relative path,
+the full marker header as reported by the gate (including its comment prefix), and a nonblank
+rationale. Quote values containing a pipe; quoting the header is recommended.
 
 ```text
-Marker-Removal: src/engine.py<TAB># NOTE: provenance remains visible<TAB>The provenance mechanism was removed.
+Marker-Removal: src/engine.py | "# NOTE: provenance remains visible" | The provenance mechanism was removed.
 ```
 
 The gate compares `HEAD` and staged index blobs just like `check-marker-preservation`. Missing,

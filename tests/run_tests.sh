@@ -659,11 +659,11 @@ expect "a staged marker deletion fails" 1 check-marker-preservation --root "$PRE
 printf 'Remove obsolete marker\n' > "$PRESERVATION/no-marker-removal-message.txt"
 expect "a marker removal without a trailer fails" 1 check-marker-removal-authorization --root "$PRESERVATION" \
     "$PRESERVATION/no-marker-removal-message.txt"
-printf 'Remove obsolete marker\n\nMarker-Removal: marked.py\tNOTE: another fact\tThe annotated behavior was removed.\n' \
+printf 'Remove obsolete marker\n\nMarker-Removal: marked.py | "NOTE: another fact" | The annotated behavior was removed.\n' \
     > "$PRESERVATION/mismatched-marker-removal-message.txt"
 expect "a mismatched marker-removal trailer fails" 1 check-marker-removal-authorization --root "$PRESERVATION" \
     "$PRESERVATION/mismatched-marker-removal-message.txt"
-printf 'Remove obsolete marker\n\nMarker-Removal: marked.py\t# NOTE: preserve this fact\tThe annotated behavior was removed.\n' \
+printf 'Remove obsolete marker\n\nMarker-Removal: marked.py | "# NOTE: preserve this fact" | The annotated behavior was removed.\n' \
     > "$PRESERVATION/marker-removal-message.txt"
 expect_scope "an exact marker-removal trailer authorizes a staged deletion" 1 \
     check-marker-removal-authorization --root "$PRESERVATION" "$PRESERVATION/marker-removal-message.txt"

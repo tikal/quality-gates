@@ -153,7 +153,7 @@ expect_pass "check-marker-preservation allows a staged marker-preserving edit" c
 printf 'VALUE = 2\n' > "$CONSUMER/marker.py"
 git -C "$CONSUMER" add marker.py
 expect_failure "check-marker-preservation rejects a staged marker removal" check-marker-preservation "marker preservation failed:"
-printf 'Remove obsolete marker\n\nMarker-Removal: marker.py\t# NOTE: preserve this fact\tThe annotated behavior was removed.\n' \
+printf 'Remove obsolete marker\n\nMarker-Removal: marker.py | "# NOTE: preserve this fact" | The annotated behavior was removed.\n' \
     > "$CONSUMER/commit-message.txt"
 expect_commit_message_pass "check-marker-removal-authorization permits an exact staged removal"
 
