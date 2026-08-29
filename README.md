@@ -285,8 +285,13 @@ reporting emitter. A clean run reports the number of classified hooks as `scope=
     - --exempt=ruff=Upstream hook owns changed-file selection.
 ```
 
-The configured hook `entry:` must name each mapped emitter. The gate statically verifies wiring;
-each emitter still needs its own runtime test proving its clean path prints an accurate scope.
+The configured hook `entry:` must name each mapped emitter. To keep this static check auditable,
+the accepted forms are `PATH`, `python PATH`, `bash PATH`, `uv run python PATH`, or `bash -c`
+containing one of those forms. The `bash -c` form may begin with exactly
+`cd RELATIVE_DIRECTORY &&` when the remaining emitter path resolves to the mapped path. Shell
+pipelines, redirections, substitutions, and other compound commands are rejected. The gate
+statically verifies wiring; each emitter still needs its own runtime test proving its clean path
+prints an accurate scope.
 
 ### check-manifest-audit-coverage
 

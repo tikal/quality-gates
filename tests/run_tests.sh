@@ -476,6 +476,30 @@ expect_scope "a hook scope contract classifies every configured hook" 3 \
 printf 'repos:\n  - repo: local\n    hooks:\n      - id: check-hook-scope-contract\n        entry: python hooks/other.py\n' > "$ENROLLMENT/wrong-entry.yaml"
 expect "a scope emitter must be executed by its hook" 1 check-hook-scope-contract --config "$ENROLLMENT/wrong-entry.yaml" \
     --hook-id check-hook-scope-contract --scope-emitter check-hook-scope-contract=hooks/marker.py
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash hooks/marker.sh\n' > "$ENROLLMENT/bash-entry.yaml"
+printf 'count=1\nprintf "clean scope=$count\\n"\n' > "$ENROLLMENT/hooks/marker.sh"
+expect_scope "a direct Bash scope emitter is accepted" 1 check-hook-scope-contract --config "$ENROLLMENT/bash-entry.yaml" \
+    --hook-id marker --scope-emitter marker=hooks/marker.sh
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash -c "python hooks/marker.py"\n' > "$ENROLLMENT/bash-command-entry.yaml"
+expect_scope "a direct Python emitter in bash -c is accepted" 1 check-hook-scope-contract \
+    --config "$ENROLLMENT/bash-command-entry.yaml" --hook-id marker --scope-emitter marker=hooks/marker.py
+mkdir -p "$ENROLLMENT/service/hooks"
+printf 'print(f"clean scope={1}")\n' > "$ENROLLMENT/service/hooks/marker.py"
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash -c "cd service && uv run python hooks/marker.py"\n' > "$ENROLLMENT/bash-directory-entry.yaml"
+expect_scope "a scoped Bash directory wrapper is accepted" 1 check-hook-scope-contract \
+    --config "$ENROLLMENT/bash-directory-entry.yaml" --hook-id marker --scope-emitter marker=service/hooks/marker.py
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: uv run python hooks/marker.py\n' > "$ENROLLMENT/uv-entry.yaml"
+expect_scope "a direct Python emitter in uv run is accepted" 1 check-hook-scope-contract --config "$ENROLLMENT/uv-entry.yaml" \
+    --hook-id marker --scope-emitter marker=hooks/marker.py
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash -c "python hooks/marker.py && echo unchecked"\n' > "$ENROLLMENT/unsafe-bash-command-entry.yaml"
+expect "a shell-composed scope emitter is rejected" 1 check-hook-scope-contract --config "$ENROLLMENT/unsafe-bash-command-entry.yaml" \
+    --hook-id marker --scope-emitter marker=hooks/marker.py
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash -c "cd ../service && uv run python hooks/marker.py"\n' > "$ENROLLMENT/escaping-bash-directory-entry.yaml"
+expect "a path-escaping Bash directory wrapper is rejected" 1 check-hook-scope-contract \
+    --config "$ENROLLMENT/escaping-bash-directory-entry.yaml" --hook-id marker --scope-emitter marker=service/hooks/marker.py
+printf 'repos:\n  - repo: local\n    hooks:\n      - id: marker\n        entry: bash -c "python hooks/marker.py > scope.log"\n' > "$ENROLLMENT/redirected-bash-command-entry.yaml"
+expect "a redirected Bash scope emitter is rejected" 1 check-hook-scope-contract \
+    --config "$ENROLLMENT/redirected-bash-command-entry.yaml" --hook-id marker --scope-emitter marker=hooks/marker.py
 git -C "$ENROLLMENT" init -q
 git -C "$ENROLLMENT" config user.email t@t
 git -C "$ENROLLMENT" config user.name t

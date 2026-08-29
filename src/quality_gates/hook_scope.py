@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import posixpath
 import re
 import shlex
 import sys
@@ -78,7 +79,47 @@ def _executes(entry: str | None, emitter: str) -> bool:
         command = shlex.split(entry)
     except ValueError:
         return False
-    return command == [emitter] or len(command) > 1 and command[0].startswith("python") and command[1] == emitter
+    if _executes_command(command, emitter):
+        return True
+    if len(command) != 3 or command[:2] != ["bash", "-c"]:
+        return False
+    try:
+        wrapped = shlex.split(command[2])
+    except ValueError:
+        return False
+    if _executes_command(wrapped, emitter, strict=True):
+        return True
+    if len(wrapped) < 4 or wrapped[0] != "cd" or wrapped[2] != "&&":
+        return False
+    directory = _relative_path(wrapped[1])
+    emitter_path = _relative_path(emitter)
+    if directory is None or emitter_path is None:
+        return False
+    relative_emitter = posixpath.relpath(emitter_path, directory)
+    if _relative_path(relative_emitter) is None:
+        return False
+    return _executes_command(wrapped[3:], relative_emitter, strict=True)
+
+
+def _executes_command(command: list[str], emitter: str, *, strict: bool = False) -> bool:
+    return (
+        command == [emitter]
+        or (
+            len(command) > 1
+            and command[0].startswith("python")
+            and command[1] == emitter
+            and (not strict or len(command) == 2)
+        )
+        or command == ["bash", emitter]
+        or command == ["uv", "run", "python", emitter]
+    )
+
+
+def _relative_path(path: str) -> str | None:
+    normalized = posixpath.normpath(path)
+    if path.startswith("/") or normalized in {".", ".."} or normalized.startswith("../"):
+        return None
+    return normalized
 
 
 if __name__ == "__main__":
