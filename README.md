@@ -564,9 +564,9 @@ Keep exceptions narrow: one CVE identity and one image reference with rationale.
 whole image, scanner outage, inaccessible registry, or unscanned target. Re-triage/remove an exception when the
 scanner no longer reports it or the image reference changes.
 
-## Cadence migration
+## Migration guidance
 
-Replace repository-owned Cadence quality scripts with the corresponding gates, but copy each
+Replace repository-owned quality scripts with the corresponding gates, but copy each
 consumer's existing paths, baselines, budgets, confidence thresholds, formats, and clone thresholds
 into hook arguments. The gate is the common enforcement mechanism; the policy values remain owned by
 the consumer repository.
@@ -578,14 +578,14 @@ the consumer repository.
 | TODO/FIXME/NOTE/HACK/XXX budget | `check-marker-budget` | `--ceiling` and every `--per-file` allowance |
 | Python dead-code check | `check-dead-code` | Each `--path`, exclusions, ignored names, and `--min-confidence` |
 | Copy-paste duplication check | `check-duplication` | Scope selection, paths, formats, extensions, exclusions, minimum lines/tokens, and threshold |
-| Pytest hierarchy and mock restrictions | `check-pytest-describe` and `check-forbidden-mocks` | Test roots, `--factory-location`, and `--condition-infix _when_ --condition-infix _with_` when preserving Cadence's current naming policy |
+| Pytest hierarchy and mock restrictions | `check-pytest-describe` and `check-forbidden-mocks` | Test roots, `--factory-location`, and consumer-approved `--condition-infix` values |
 
 Do not migrate scanner invocation, Docker/build commands, credential handling, report normalization,
 scheduling, or CI artifact retention into these hooks. Keep that operational orchestration in the
 consumer's trusted CI workflow, then pass its generated evidence to the applicable policy gate.
-Cadence must retain its deploy-manifest image coverage guard until a consumer-side check proves every
-deployment/accessory image is represented in the reviewed inventory. The enrollment gate validates declared mappings;
-it does not parse Kamal, Nomad, or arbitrary deployment configuration.
+Retain any deployment-manifest image-coverage check until an equivalent consumer-side check proves every deployment
+image is represented in the reviewed inventory. The enrollment gate validates declared mappings; it does not parse
+consumer-specific deployment configuration.
 
 ### check-duplication
 
