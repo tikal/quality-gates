@@ -41,6 +41,21 @@ expect_failure() {
     fi
 }
 
+expect_commit_message_pass() {
+    local label="$1" output
+    if output="$(
+        cd "$CONSUMER"
+        uv run --isolated --with pre-commit==4.6.0 pre-commit run check-marker-removal-authorization \
+            --config "$CONSUMER/commit-message-hooks.yaml" --hook-stage commit-msg \
+            --commit-msg-filename "$CONSUMER/commit-message.txt" 2>&1
+    )"; then
+        printf '  ok %s\n' "$label"
+    else
+        printf '  FAIL %s\n%s\n' "$label" "$output" >&2
+        exit 1
+    fi
+}
+
 mkdir -p "$HOOK_REPOSITORY"
 git -C "$ROOT" archive --format=tar HEAD | tar -xf - -C "$HOOK_REPOSITORY"
 git -C "$ROOT" diff --binary HEAD | git -C "$HOOK_REPOSITORY" apply --allow-empty
@@ -62,6 +77,8 @@ printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-
     "$HOOK_REPOSITORY" "$(git -C "$HOOK_REPOSITORY" rev-parse HEAD)" > "$CONSUMER/.pre-commit-config.yaml"
 printf '      - id: check-container-image-enrollment\n        args: [--ledger, .quality/container-image-enrollment.json, --inventory, .quality/images.json]\n      - id: check-container-image-immutable-assessment\n        args: [--enrollment, .quality/container-image-enrollment.json, --inventory, .quality/images.json, --report, .quality-ci/immutable-assessment.json, --exceptions, .quality/container-image-exceptions.json, --as-of, "2026-08-28T12:00:00Z", --max-age-hours, "24"]\n' \
     >> "$CONSUMER/.pre-commit-config.yaml"
+printf 'repos:\n  - repo: file://%s\n    rev: %s\n    hooks:\n      - id: check-marker-removal-authorization\n' \
+    "$HOOK_REPOSITORY" "$(git -C "$HOOK_REPOSITORY" rev-parse HEAD)" > "$CONSUMER/commit-message-hooks.yaml"
 mkdir -p "$CONSUMER/.quality" "$CONSUMER/hooks" "$CONSUMER/tools" "$CONSUMER/generated"
 printf 'dict.py\tdict-param\t76e94348139b\t1\n' > "$CONSUMER/.quality/dict-params.txt"
 printf 'VALUE = 1\n' > "$CONSUMER/inline.py"
@@ -136,6 +153,9 @@ expect_pass "check-marker-preservation allows a staged marker-preserving edit" c
 printf 'VALUE = 2\n' > "$CONSUMER/marker.py"
 git -C "$CONSUMER" add marker.py
 expect_failure "check-marker-preservation rejects a staged marker removal" check-marker-preservation "marker preservation failed:"
+printf 'Remove obsolete marker\n\nMarker-Removal: marker.py\t# NOTE: preserve this fact\tThe annotated behavior was removed.\n' \
+    > "$CONSUMER/commit-message.txt"
+expect_commit_message_pass "check-marker-removal-authorization permits an exact staged removal"
 
 printf 'stale payload\n' > "$CONSUMER/input.txt"
 git -C "$CONSUMER" add input.txt

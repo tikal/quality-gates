@@ -155,6 +155,29 @@ if a selected source cannot be parsed safely.
 For a valid Bash heredoc, marker-looking text in the heredoc body is ignored while real comments
 outside the body are scanned. Malformed or ambiguous heredoc syntax remains a fail-closed error.
 
+### check-marker-removal-authorization
+
+This opt-in alternative to `check-marker-preservation` runs at the `commit-msg` stage. It permits
+an intentional staged marker removal only when the final commit message contains one exact,
+rationale-backed trailer for each removed header. Do not configure it alongside strict
+`check-marker-preservation`: the strict pre-commit gate intentionally permits no removals.
+
+```yaml
+- id: check-marker-removal-authorization
+```
+
+Each trailer has exactly three tab-separated values: repository-relative path, the full marker
+header as reported by the gate (including its comment prefix), and a nonblank rationale.
+
+```text
+Marker-Removal: src/engine.py<TAB># NOTE: provenance remains visible<TAB>The provenance mechanism was removed.
+```
+
+The gate compares `HEAD` and staged index blobs just like `check-marker-preservation`. Missing,
+stale, mismatched, or malformed trailers fail. Repeated identical removals require repeated
+trailers, so no authorization can cover another file, header, or occurrence. A clean run reports
+the staged eligible source-file count as `scope=N`.
+
 ### check-generated-artifact-freshness
 
 This opt-in gate verifies that declared generated artifacts exactly match deterministic output.

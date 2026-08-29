@@ -656,9 +656,22 @@ git -C "$PRESERVATION" commit -qm marked
 printf 'VALUE = 1\n' > "$PRESERVATION/marked.py"
 git -C "$PRESERVATION" add marked.py
 expect "a staged marker deletion fails" 1 check-marker-preservation --root "$PRESERVATION"
+printf 'Remove obsolete marker\n' > "$PRESERVATION/no-marker-removal-message.txt"
+expect "a marker removal without a trailer fails" 1 check-marker-removal-authorization --root "$PRESERVATION" \
+    "$PRESERVATION/no-marker-removal-message.txt"
+printf 'Remove obsolete marker\n\nMarker-Removal: marked.py\tNOTE: another fact\tThe annotated behavior was removed.\n' \
+    > "$PRESERVATION/mismatched-marker-removal-message.txt"
+expect "a mismatched marker-removal trailer fails" 1 check-marker-removal-authorization --root "$PRESERVATION" \
+    "$PRESERVATION/mismatched-marker-removal-message.txt"
+printf 'Remove obsolete marker\n\nMarker-Removal: marked.py\t# NOTE: preserve this fact\tThe annotated behavior was removed.\n' \
+    > "$PRESERVATION/marker-removal-message.txt"
+expect_scope "an exact marker-removal trailer authorizes a staged deletion" 1 \
+    check-marker-removal-authorization --root "$PRESERVATION" "$PRESERVATION/marker-removal-message.txt"
 printf '# NOTE: preserve this fact\nVALUE = 2\n' > "$PRESERVATION/marked.py"
 git -C "$PRESERVATION" add marked.py
 expect_scope "a staged marker-preserving edit reports scope" 1 check-marker-preservation --root "$PRESERVATION"
+expect "a stale marker-removal trailer fails" 1 check-marker-removal-authorization --root "$PRESERVATION" \
+    "$PRESERVATION/marker-removal-message.txt"
 git -C "$PRESERVATION" commit -qm preserved
 printf 'VALUE = 3\n# NOTE: preserve this fact\n' > "$PRESERVATION/marked.py"
 git -C "$PRESERVATION" add marked.py
