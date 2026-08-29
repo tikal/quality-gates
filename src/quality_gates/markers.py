@@ -7,12 +7,13 @@ so comments are syntax nodes rather than patterns that can match source data.
 from __future__ import annotations
 
 import ast
+import json
 import re
+import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import NamedTuple
-
-from tree_sitter_language_pack import get_parser
 
 from quality_gates.source import UnreadableSource, comment_tokens
 
@@ -20,6 +21,7 @@ MARKER_PATTERN = re.compile(r"(?:#|//|/\*|\*)\s*(?:TODO|FIXME|NOTE|HACK|XXX)\b")
 BADGE_PATTERN = re.compile(r"^#\s*(?:ALLOW:|TYPE:)", re.IGNORECASE)
 PRAGMA_PATTERN = re.compile(r"#\s*(?:noqa|type:\s*ignore|pyright:|mypy:|ruff:|nosec)\b", re.IGNORECASE)
 MAX_BLOCK_LINES = 10
+TREE_SITTER_WORKER_TIMEOUT_SECONDS = 5
 
 
 class CommentLine(NamedTuple):
@@ -124,16 +126,19 @@ def _add_block_comment(comments: FileComments, row: int, column: int, text: str,
             comments.own_line.append(CommentLine(row + offset, line_column, line.strip()))
 
 
-def _tree_sitter_comments(source: str, language: str) -> FileComments:
+def _native_tree_sitter_comments(source: str, language: str) -> FileComments:
+    from tree_sitter_language_pack import get_parser
+
     source_bytes = source.encode("utf-8")
     root = get_parser(language).parse(source_bytes).root_node
     if root.has_error:
         raise _MarkerUnreadableSource(_error_line(root), f"{language} syntax error")
-    if language == "bash" and _has_node(root, "heredoc_redirect"):
-        raise _MarkerUnreadableSource(1, "bash heredoc parsing is unsupported")
 
     comments = FileComments([], [])
+    heredoc_bodies = _node_ranges(root, "heredoc_body") if language == "bash" else []
     for node in _comment_nodes(root):
+        if any(_ranges_overlap((node.start_byte, node.end_byte), body) for body in heredoc_bodies):
+            continue
         text = source_bytes[node.start_byte : node.end_byte].decode("utf-8")
         line_start = source_bytes.rfind(b"\n", 0, node.start_byte) + 1
         has_code = bool(source_bytes[line_start : node.start_byte].strip())
@@ -142,6 +147,88 @@ def _tree_sitter_comments(source: str, language: str) -> FileComments:
         else:
             _add_line_comment(comments, node.start_point.row + 1, node.start_point.column, text, has_code)
     return comments
+
+
+def _run_tree_sitter_worker(source: str, language: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [sys.executable, "-m", "quality_gates.markers", "--tree-sitter-worker", language],
+        input=source.encode("utf-8"),
+        capture_output=True,
+        timeout=TREE_SITTER_WORKER_TIMEOUT_SECONDS,
+    )
+
+
+def _tree_sitter_comments(source: str, language: str) -> FileComments:
+    try:
+        result = _run_tree_sitter_worker(source, language)
+    except subprocess.TimeoutExpired as exc:
+        raise _MarkerUnreadableSource(1, "tree-sitter worker timed out") from exc
+    except Exception as exc:
+        raise _MarkerUnreadableSource(1, f"tree-sitter worker failed: {type(exc).__name__}: {exc}") from exc
+
+    _check_tree_sitter_worker_result(result)
+
+    try:
+        return _comments_from_tree_sitter_worker(result.stdout)
+    except _MarkerUnreadableSource:
+        raise
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise _MarkerUnreadableSource(1, f"tree-sitter worker returned malformed output: {exc}") from exc
+
+
+def _check_tree_sitter_worker_result(result: subprocess.CompletedProcess[bytes]) -> None:
+    if not result.returncode:
+        return
+    if result.returncode < 0:
+        raise _MarkerUnreadableSource(1, f"tree-sitter worker terminated by signal {-result.returncode}")
+    detail = result.stderr.decode("utf-8", "replace").strip()
+    reason = f"tree-sitter worker exited {result.returncode}"
+    if detail:
+        reason = f"{reason}: {detail}"
+    raise _MarkerUnreadableSource(1, reason)
+
+
+def _comments_from_tree_sitter_worker(output: bytes) -> FileComments:
+    payload = json.loads(output)
+    if set(payload) == {"error"}:
+        error = payload["error"]
+        if set(error) != {"line", "reason"} or type(error["line"]) is not int or not isinstance(error["reason"], str):
+            raise ValueError("invalid error payload")
+        raise _MarkerUnreadableSource(error["line"], error["reason"])
+    if set(payload) != {"comments"}:
+        raise ValueError("unexpected payload")
+    comments = payload["comments"]
+    if set(comments) != {"own_line", "trailing"}:
+        raise ValueError("invalid comments payload")
+    return FileComments(*(_comment_lines(comments[key]) for key in ("own_line", "trailing")))
+
+
+def _comment_lines(values: object) -> list[CommentLine]:
+    if not isinstance(values, list):
+        raise ValueError("comment list is not a list")
+    comments = []
+    for value in values:
+        if (
+            not isinstance(value, list)
+            or len(value) != 3
+            or type(value[0]) is not int
+            or type(value[1]) is not int
+            or not isinstance(value[2], str)
+        ):
+            raise ValueError("invalid comment")
+        comments.append(CommentLine(*value))
+    return comments
+
+
+def _tree_sitter_worker(language: str) -> int:
+    source = sys.stdin.buffer.read().decode("utf-8")
+    try:
+        comments = _native_tree_sitter_comments(source, language)
+    except UnreadableSource as exc:
+        print(json.dumps({"error": {"line": exc.line, "reason": exc.reason}}))
+        return 0
+    print(json.dumps({"comments": {key: list(value) for key, value in comments._asdict().items()}}))
+    return 0
 
 
 def _comment_nodes(root: object) -> list[object]:
@@ -166,14 +253,19 @@ def _error_line(root: object) -> int:
     return 1
 
 
-def _has_node(root: object, node_type: str) -> bool:
+def _node_ranges(root: object, node_type: str) -> list[tuple[int, int]]:
     nodes = [root]
+    ranges = []
     while nodes:
         node = nodes.pop()
         if node.type == node_type:
-            return True
+            ranges.append((node.start_byte, node.end_byte))
         nodes.extend(reversed(node.children))
-    return False
+    return ranges
+
+
+def _ranges_overlap(first: tuple[int, int], second: tuple[int, int]) -> bool:
+    return first[0] < second[1] and second[0] < first[1]
 
 
 def _javascript_comments(source: str) -> FileComments:
@@ -238,3 +330,9 @@ def is_scannable(relative_path: str) -> bool:
     """True for declared non-generated source files that the marker budget reads."""
     path = Path(relative_path)
     return path.suffix in SCANNED_SUFFIXES and ".generated." not in path.name
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--tree-sitter-worker":
+        sys.exit(_tree_sitter_worker(sys.argv[2]))
+    sys.exit("usage: python -m quality_gates.markers --tree-sitter-worker LANGUAGE")
