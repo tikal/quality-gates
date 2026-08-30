@@ -9,21 +9,21 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from quality_gates.marker_preservation import _eligible, _headers, _staged_paths, _tracked_paths
+from quality_gates.marker_changes import eligible, headers, staged_paths, tracked_paths
 
 _TRAILER = "Marker-Removal: "
 
 
 def _changed_paths(root: Path) -> list[tuple[str, str]]:
-    changed = [(status, path) for status, path in _staged_paths(root) if _eligible(path)]
-    return changed or [("M", path) for path in _tracked_paths(root) if _eligible(path)]
+    changed = [(status, path) for status, path in staged_paths(root) if eligible(path)]
+    return changed or [("M", path) for path in tracked_paths(root) if eligible(path)]
 
 
 def _removals(root: Path, changed: list[tuple[str, str]]) -> Counter[tuple[str, str]]:
     removals: Counter[tuple[str, str]] = Counter()
     for status, path in changed:
-        before = Counter() if status == "A" else _headers(root, "HEAD", path)
-        after = Counter() if status == "D" else _headers(root, ":", path)
+        before = Counter() if status == "A" else headers(root, "HEAD", path)
+        after = Counter() if status == "D" else headers(root, ":", path)
         removals.update({(path, header): count for header, count in (before - after).items()})
     return removals
 

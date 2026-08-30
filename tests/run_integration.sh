@@ -45,9 +45,10 @@ expect_commit_message_pass() {
     local label="$1" output
     if output="$(
         cd "$CONSUMER"
-        uv run --isolated --with pre-commit==4.6.0 pre-commit run check-marker-removal-authorization \
-            --config "$CONSUMER/commit-message-hooks.yaml" --hook-stage commit-msg \
-            --commit-msg-filename "$CONSUMER/commit-message.txt" 2>&1
+        uv run --isolated --with pre-commit==4.6.0 pre-commit install --config "$CONSUMER/commit-message-hooks.yaml" \
+            --hook-type commit-msg
+        rm .git/hooks/pre-commit
+        git commit -F "$CONSUMER/commit-message.txt" 2>&1
     )"; then
         printf '  ok %s\n' "$label"
     else

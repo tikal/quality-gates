@@ -174,7 +174,8 @@ repos:
 Set `default_install_hook_types` so a normal `pre-commit install` installs the required
 `commit-msg` hook. Each trailer has exactly three pipe-separated values: repository-relative path,
 the full marker header as reported by the gate (including its comment prefix), and a nonblank
-rationale. Quote values containing a pipe; quoting the header is recommended.
+rationale. Quote values containing a pipe. In a quoted value, double each embedded double quote
+(`"` becomes `""`).
 
 ```text
 Marker-Removal: src/engine.py | "# NOTE: provenance remains visible" | The provenance mechanism was removed.
@@ -183,7 +184,8 @@ Marker-Removal: src/engine.py | "# NOTE: provenance remains visible" | The prove
 The gate compares `HEAD` and staged index blobs just like `check-marker-preservation`. Missing,
 stale, mismatched, or malformed trailers fail. Repeated identical removals require repeated
 trailers, so no authorization can cover another file, header, or occurrence. A clean run reports
-the staged eligible source-file count as `scope=N`.
+the staged eligible source-file count as `scope=N`. With no staged eligible source path, it checks
+every tracked eligible source file and reports that fallback scope.
 
 ### check-generated-artifact-freshness
 

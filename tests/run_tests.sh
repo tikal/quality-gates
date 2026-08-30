@@ -712,6 +712,21 @@ printf '# NOTE: preserve this fact\nif True print(1)\n' > "$PRESERVATION/marked.
 git -C "$PRESERVATION" add marked.py
 expect "a tokenizable invalid staged Python source fails closed" 1 \
     check-marker-preservation --root "$PRESERVATION"
+printf 'Remove quoted marker\n\nMarker-Removal: quoted.py | "# NOTE: left | right" | "The policy | branch was removed."\n' \
+    > "$PRESERVATION/quoted-marker-removal-message.txt"
+expect "a quoted marker-removal trailer preserves pipes" 0 python -c \
+    'from pathlib import Path; from quality_gates.marker_removal_authorization import _trailers; assert _trailers(Path(__import__("sys").argv[1])) == {("quoted.py", "# NOTE: left | right"): 1}' \
+    "$PRESERVATION/quoted-marker-removal-message.txt"
+printf 'Remove duplicate markers\n\nMarker-Removal: duplicate.py | "# NOTE: duplicate" | First removal.\nMarker-Removal: duplicate.py | "# NOTE: duplicate" | Second removal.\n' \
+    > "$PRESERVATION/repeated-marker-removal-message.txt"
+expect "repeated marker-removal trailers retain their count" 0 python -c \
+    'from pathlib import Path; from quality_gates.marker_removal_authorization import _trailers; assert _trailers(Path(__import__("sys").argv[1])) == {("duplicate.py", "# NOTE: duplicate"): 2}' \
+    "$PRESERVATION/repeated-marker-removal-message.txt"
+printf 'Malformed marker removal\n\nMarker-Removal: quoted.py | "# NOTE: unterminated | reason\n' \
+    > "$PRESERVATION/malformed-marker-removal-message.txt"
+expect "a malformed quoted marker-removal trailer fails" 1 python -c \
+    'from pathlib import Path; from quality_gates.marker_removal_authorization import _trailers; _trailers(Path(__import__("sys").argv[1]))' \
+    "$PRESERVATION/malformed-marker-removal-message.txt"
 
 echo "== generated artifacts =="
 git -C "$ARTIFACTS" init -q
