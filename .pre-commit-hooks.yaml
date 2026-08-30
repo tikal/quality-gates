@@ -38,6 +38,14 @@
   pass_filenames: false
   require_serial: true
 
+- id: check-marker-removal-authorization
+  name: check marker removal authorization
+  description: Opt in at commit-msg to require exact, rationale-backed authorization for staged marker removals.
+  entry: check-marker-removal-authorization
+  language: python
+  stages: [commit-msg]
+  require_serial: true
+
 - id: check-generated-artifact-freshness
   name: check generated artifact freshness
   description: Opt in to verify deterministic generated artifacts against the staged index.

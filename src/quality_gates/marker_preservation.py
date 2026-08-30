@@ -3,52 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import os
-import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
 
-from quality_gates.discovery import SKIPPED_DIRECTORIES, is_in_skipped_directory
-from quality_gates.markers import is_scannable, marker_headers
-from quality_gates.source import UnreadableSource
-
-
-def _git(root: Path, arguments: list[str]) -> bytes:
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    result = subprocess.run(["git", "-C", str(root), *arguments], capture_output=True, env=env)
-    if result.returncode:
-        raise RuntimeError(result.stderr.decode("utf-8", "replace").strip() or "git command failed")
-    return result.stdout
-
-
-def _headers(root: Path, revision: str, path: str) -> Counter[str]:
-    try:
-        reference = f":{path}" if revision == ":" else f"{revision}:{path}"
-        content = _git(root, ["show", reference]).decode("utf-8")
-        return Counter(header.text.strip() for header in marker_headers(content, Path(path).suffix))
-    except (RuntimeError, UnicodeDecodeError, UnreadableSource, ValueError) as exc:
-        raise RuntimeError(f"{path}:{revision}: {exc}") from exc
-
-
-def _staged_paths(root: Path) -> list[tuple[str, str]]:
-    entries = _git(root, ["diff", "--cached", "--no-renames", "--name-status", "-z"]).split(b"\0")
-    entries.pop()
-    if len(entries) % 2:
-        raise RuntimeError("git diff returned an incomplete staged file status")
-    return [
-        (status.decode("utf-8"), path.decode("utf-8")) for status, path in zip(entries[::2], entries[1::2], strict=True)
-    ]
-
-
-def _tracked_paths(root: Path) -> list[str]:
-    entries = _git(root, ["ls-files", "-z"]).split(b"\0")
-    entries.pop()
-    return [path.decode("utf-8") for path in entries]
-
-
-def _eligible(path: str) -> bool:
-    return is_scannable(path) and not is_in_skipped_directory(Path(path), SKIPPED_DIRECTORIES)
+from quality_gates.marker_changes import eligible, headers, staged_paths, tracked_paths
 
 
 def main() -> int:
@@ -57,14 +16,14 @@ def main() -> int:
     arguments = parser.parse_args()
     root = arguments.root.resolve()
     try:
-        changed = _staged_paths(root)
+        changed = staged_paths(root)
     except (RuntimeError, UnicodeDecodeError) as exc:
         print(f"marker preservation failed: {exc}", file=sys.stderr)
         return 1
-    changed = [(status, path) for status, path in changed if _eligible(path)]
+    changed = [(status, path) for status, path in changed if eligible(path)]
     if not changed:
         try:
-            changed = [("M", path) for path in _tracked_paths(root) if _eligible(path)]
+            changed = [("M", path) for path in tracked_paths(root) if eligible(path)]
         except (RuntimeError, UnicodeDecodeError) as exc:
             print(f"marker preservation failed: {exc}", file=sys.stderr)
             return 1
@@ -77,12 +36,12 @@ def main() -> int:
     findings: list[str] = []
     for status, path in changed:
         try:
-            before = Counter() if status == "A" else _headers(root, "HEAD", path)
+            before = Counter() if status == "A" else headers(root, "HEAD", path)
         except RuntimeError as exc:
             findings.append(str(exc))
             continue
         try:
-            after = Counter() if status == "D" else _headers(root, ":", path)
+            after = Counter() if status == "D" else headers(root, ":", path)
         except RuntimeError as exc:
             findings.append(str(exc))
             continue
