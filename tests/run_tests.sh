@@ -722,6 +722,11 @@ printf 'Remove duplicate markers\n\nMarker-Removal: duplicate.py | "# NOTE: dupl
 expect "repeated marker-removal trailers retain their count" 0 python -c \
     'from pathlib import Path; from quality_gates.marker_removal_authorization import _trailers; assert _trailers(Path(__import__("sys").argv[1])) == {("duplicate.py", "# NOTE: duplicate"): 2}' \
     "$PRESERVATION/repeated-marker-removal-message.txt"
+printf 'Remove separate markers\n\nMarker-Removal: first.py | "# NOTE: first" | First removal.\n\nMarker-Removal: second.py | "# NOTE: second" | Second removal.\n' \
+    > "$PRESERVATION/separated-marker-removal-message.txt"
+expect "separated marker-removal trailers retain every authorization" 0 python -c \
+    'from pathlib import Path; from quality_gates.marker_removal_authorization import _trailers; assert _trailers(Path(__import__("sys").argv[1])) == {("first.py", "# NOTE: first"): 1, ("second.py", "# NOTE: second"): 1}' \
+    "$PRESERVATION/separated-marker-removal-message.txt"
 printf 'Malformed marker removal\n\nMarker-Removal: quoted.py | "# NOTE: unterminated | reason\n' \
     > "$PRESERVATION/malformed-marker-removal-message.txt"
 expect "a malformed quoted marker-removal trailer fails" 1 python -c \
