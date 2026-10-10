@@ -35,9 +35,8 @@ def _trailers(message: Path) -> Counter[tuple[str, str]]:
         raise RuntimeError(f"cannot read commit message {message}: {exc}") from exc
     while lines and not lines[-1].strip():
         lines.pop()
-    trailer_start = next((index + 1 for index in range(len(lines) - 1, -1, -1) if not lines[index].strip()), 0)
     authorizations: Counter[tuple[str, str]] = Counter()
-    for line_number, line in enumerate(lines[trailer_start:], start=trailer_start + 1):
+    for line_number, line in enumerate(lines, start=1):
         if not line.startswith(_TRAILER):
             continue
         try:
